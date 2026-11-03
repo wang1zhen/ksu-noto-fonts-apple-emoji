@@ -3,14 +3,16 @@
 
 Parses original and transformed font XML files using xml.etree.ElementTree and
 verifies structural and semantic invariants:
-1. Root <familyset> tag and version attribute match mode ('fallback' vs 'legacy').
-2. Default sans-serif (and in legacy mode: unnamed Roboto family after sans-serif,
-   sys-sans-en, op-sans-en) are replaced with KSU-NotoSans-Regular-VF.ttf and
+1. Root <familyset> tag and version attribute match mode ('fallback', 'legacy', 'base').
+2. Default sans-serif (in legacy mode: also unnamed Roboto family after sans-serif;
+   in legacy and base modes: also sys-sans-en, op-sans-en; in base mode: no unnamed
+   Roboto family after sans-serif) are replaced with KSU-NotoSans-Regular-VF.ttf and
    KSU-NotoSans-Italic-VF.ttf, wdth=100, weights 100..900, without Roboto ital
    axis, postScriptName, or weight 1000.
-3. Non-target named families (sans-serif-condensed, roboto-flex, op-sans-num,
-   serif, monospace, etc.), other language families (e.g. und-Arab), and all
-   <alias> elements are preserved verbatim.
+3. Non-target named families (sys-serif, sans-serif-condensed, roboto-flex,
+   op-sans-num, osans-solid-digits, serif, monospace, etc.), other language
+   families (e.g. und-Arab), non-western unnamed families, and all <alias> elements
+   are preserved verbatim.
 4. CJK locale families (zh-Hans, zh-Hant,zh-Bopo, first ja, ko) prepend a new
    dedicated <family lang="..."> containing KSU-NotoSansCJK{sc,tc,jp,kr}-VF.ttf
    plus verbatim copies of all original fallbackFor="..." <font> elements
@@ -164,7 +166,7 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
     if "EXCERPT FIXTURE ONLY" in orig_raw and "EXCERPT FIXTURE ONLY" not in out_raw:
         raise AssertionError(f"{out_path}: lost excerpt comment header")
 
-    if mode == "legacy" and "Commented-out old CJK OTC families MUST remain untouched" in orig_raw:
+    if mode in ("legacy", "base") and "Commented-out old CJK OTC families MUST remain untouched" in orig_raw:
         if "Commented-out old CJK OTC families MUST remain untouched" not in out_raw:
             raise AssertionError(f"{out_path}: commented-out CJK OTC block was altered or removed")
 
@@ -179,8 +181,8 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
         raise AssertionError(f"{out_path}: root attributes changed from {orig_root.attrib} to {out_root.attrib}")
     if mode == "fallback" and "version" in out_root.attrib:
         raise AssertionError(f"{out_path}: fallback familyset must not have version attribute")
-    if mode == "legacy" and "version" not in out_root.attrib:
-        raise AssertionError(f"{out_path}: legacy familyset must have version attribute")
+    if mode in ("legacy", "base") and "version" not in out_root.attrib:
+        raise AssertionError(f"{out_path}: {mode} familyset must have version attribute")
 
     for child in out_root:
         if child.tag not in ("family", "alias"):
@@ -211,31 +213,88 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
     if mode == "fallback":
         assert_modern_western_family(sans_fams[0], "fallback:sans-serif")
     else:
-        assert_legacy_western_family(sans_fams[0], "legacy:sans-serif")
+        assert_legacy_western_family(sans_fams[0], f"{mode}:sans-serif")
         sans_idx = out_families.index(sans_fams[0])
-        unnamed_fam = out_families[sans_idx + 1]
-        if unnamed_fam.attrib != {}:
-            raise AssertionError(f"{out_path}: expected unnamed family after sans-serif")
-        assert_modern_western_family(unnamed_fam, "legacy:unnamed-after-sans-serif")
+        if mode == "legacy":
+            unnamed_fam = out_families[sans_idx + 1]
+            if unnamed_fam.attrib != {}:
+                raise AssertionError(f"{out_path}: expected unnamed family after sans-serif")
+            assert_modern_western_family(unnamed_fam, "legacy:unnamed-after-sans-serif")
+        else:
+            next_fam = out_families[sans_idx + 1]
+            if next_fam.attrib == {}:
+                raise AssertionError(f"{out_path}: unexpected unnamed family after sans-serif in base mode")
 
         for oplus_name in ("sys-sans-en", "op-sans-en"):
             matches = [f for f in out_families if f.attrib.get("name") == oplus_name]
             if len(matches) != 1:
                 raise AssertionError(f"{out_path}: expected 1 {oplus_name} family, got {len(matches)}")
-            assert_legacy_western_family(matches[0], f"legacy:{oplus_name}")
+            assert_legacy_western_family(matches[0], f"{mode}:{oplus_name}")
 
-    # Check non-target named families are completely untouched
-    for untouched_name in ("sans-serif-condensed", "roboto-flex", "op-sans-num", "serif", "monospace"):
+    # Check all non-target named families are completely untouched
+    target_names = {"sans-serif"} if mode == "fallback" else {"sans-serif", "sys-sans-en", "op-sans-en"}
+    for untouched_name in (
+        "sans-serif-condensed",
+        "sys-serif",
+        "roboto-flex",
+        "op-sans-num",
+        "osans-solid-digits",
+        "serif",
+        "monospace",
+    ):
         orig_u = [normalize_elem(f) for f in orig_families if f.attrib.get("name") == untouched_name]
         out_u = [normalize_elem(f) for f in out_families if f.attrib.get("name") == untouched_name]
         if orig_u != out_u:
             raise AssertionError(f"{out_path}: non-target family '{untouched_name}' was modified")
 
-    # Check non-CJK language families (e.g. und-Arab) untouched
+    orig_non_target_named = [
+        normalize_elem(f)
+        for f in orig_families
+        if "name" in f.attrib and f.attrib.get("name", "").lower() not in target_names
+    ]
+    out_non_target_named = [
+        normalize_elem(f)
+        for f in out_families
+        if "name" in f.attrib and f.attrib.get("name", "").lower() not in target_names
+    ]
+    if orig_non_target_named != out_non_target_named:
+        raise AssertionError(f"{out_path}: one or more non-target named families were modified")
+
+    # Check all non-CJK, non-Emoji language families (including und-Arab) untouched
+    cjk_langs = {"zh-Hans", "zh-Hant,zh-Bopo", "zh-Bopo,zh-Hant", "ja", "ko"}
     orig_arab = [normalize_elem(f) for f in orig_families if f.attrib.get("lang") == "und-Arab"]
     out_arab = [normalize_elem(f) for f in out_families if f.attrib.get("lang") == "und-Arab"]
     if orig_arab != out_arab:
         raise AssertionError(f"{out_path}: non-CJK language family 'und-Arab' was modified")
+
+    orig_other_lang = [
+        normalize_elem(f)
+        for f in orig_families
+        if "lang" in f.attrib and f.attrib["lang"] not in cjk_langs and f.attrib["lang"].lower() != "und-zsye"
+    ]
+    out_other_lang = [
+        normalize_elem(f)
+        for f in out_families
+        if "lang" in f.attrib and f.attrib["lang"] not in cjk_langs and f.attrib["lang"].lower() != "und-zsye"
+    ]
+    if orig_other_lang != out_other_lang:
+        raise AssertionError(f"{out_path}: non-CJK/non-Emoji language families were modified")
+
+    # Check unnamed non-target families are preserved verbatim
+    orig_sans_idx = next(i for i, f in enumerate(orig_families) if f.attrib.get("name") == "sans-serif")
+    out_sans_idx = next(i for i, f in enumerate(out_families) if f.attrib.get("name") == "sans-serif")
+    orig_unnamed_non_target = [
+        normalize_elem(f)
+        for i, f in enumerate(orig_families)
+        if f.attrib == {} and not (mode == "legacy" and i == orig_sans_idx + 1)
+    ]
+    out_unnamed_non_target = [
+        normalize_elem(f)
+        for i, f in enumerate(out_families)
+        if f.attrib == {} and not (mode == "legacy" and i == out_sans_idx + 1)
+    ]
+    if orig_unnamed_non_target != out_unnamed_non_target:
+        raise AssertionError(f"{out_path}: unnamed non-target families were modified")
 
     # Check CJK locale families
     cjk_map = {
@@ -287,15 +346,15 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
         else:
             expected_normal_count = 9
             if len(prep_fonts) != expected_normal_count + len(orig_fb_fonts):
-                raise AssertionError(f"{out_path}: unexpected font count in prepended legacy {lang_key} family")
+                raise AssertionError(f"{out_path}: unexpected font count in prepended {mode} {lang_key} family")
             for i, w in enumerate(range(100, 1000, 100)):
                 f = prep_fonts[i]
                 if font_filename(f) != expected_cjk_file:
-                    raise AssertionError(f"{out_path}: legacy {lang_key}[{i}] != {expected_cjk_file}")
+                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] != {expected_cjk_file}")
                 if f.attrib != {"weight": str(w), "style": "normal"}:
-                    raise AssertionError(f"{out_path}: legacy {lang_key}[{i}] unexpected attrib {f.attrib}")
+                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] unexpected attrib {f.attrib}")
                 if font_axes(f) != {"wght": str(w)}:
-                    raise AssertionError(f"{out_path}: legacy {lang_key}[{i}] unexpected axes {font_axes(f)}")
+                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] unexpected axes {font_axes(f)}")
 
         prep_fb_fonts = [normalize_elem(c) for c in prep_fonts[expected_normal_count:]]
         if prep_fb_fonts != orig_fb_fonts:
@@ -353,9 +412,9 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
             "NotoColorEmoji.ttf",
             "NotoColorEmojiFlags.ttf",
         ]:
-            raise AssertionError(f"{out_path}: unexpected emoji order in legacy mode")
+            raise AssertionError(f"{out_path}: unexpected emoji order in {mode} mode")
         if out_emoji[0].attrib.get("ignore") != "true":
-            raise AssertionError(f"{out_path}: first legacy emoji family must retain ignore='true'")
+            raise AssertionError(f"{out_path}: first {mode} emoji family must retain ignore='true'")
         if "ignore" in out_emoji[1].attrib:
             raise AssertionError(f"{out_path}: KSU-AppleColorEmoji family must not inherit ignore='true'")
 
@@ -430,7 +489,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify transformed font XML output.")
     parser.add_argument("orig_xml", help="Original input XML")
     parser.add_argument("out_xml", help="Transformed output XML")
-    parser.add_argument("--mode", required=True, choices=["fallback", "legacy"])
+    parser.add_argument("--mode", required=True, choices=["fallback", "legacy", "base"])
     args = parser.parse_args()
 
     try:

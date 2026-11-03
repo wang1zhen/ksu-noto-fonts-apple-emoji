@@ -1,10 +1,12 @@
 #!/system/bin/sh
 # Install-time OxygenOS 16 / Android 16 font configuration generator.
-# Reads the device's actual /system/etc/font_fallback.xml and /system/etc/fonts.xml,
-# validates KernelSU environment, static metamodule entrypoint presence (metamount.sh),
+# Reads the device's actual /system/etc/font_fallback.xml, /system/etc/fonts.xml, and
+# (when present) /system_ext/etc/fonts_base.xml (including its /system/system_ext/etc/fonts_base.xml
+# SAR alias), validates KernelSU environment, static metamodule entrypoint presence (metamount.sh),
 # absence of unsupported partition overrides or conflicting font modules, stages adapted
 # configs, validates output structure via fontxml.awk -v validate_only=1, and commits to
-# $MODDIR/system/etc/. Never writes to real system partitions and never mounts filesystems.
+# $MODDIR/system/etc/ and $MODDIR/system/system_ext/etc/. Never writes to real system
+# partitions and never mounts filesystems.
 # Note: Static verification of metamount.sh at install time does not guarantee runtime
 # mounting succeeded after reboot.
 
@@ -20,6 +22,8 @@ MODID="ksu_noto_fonts_apple_emoji"
 STAGING_DIR="$MODDIR/.staging"
 ORIGINAL_DIR="$MODDIR/config/original"
 DATA_DIR="$MODDIR/data"
+HAS_BASE_XML=0
+BASE_XML_SRC=""
 
 cleanup_staging() {
   if [ -n "${STAGING_DIR:-}" ] && [ -d "$STAGING_DIR" ]; then
@@ -249,16 +253,84 @@ check_conflicting_modules() {
   done
 }
 
-# 4. Check partition overrides: reject if secondary partitions override primary system font configs
-#    in ways our module does not adapt or cannot safely map.
+# 4. Check partition overrides and resolve supported /system_ext/etc/fonts_base.xml
+resolve_system_ext_fonts_base() {
+  HAS_BASE_XML=0
+  BASE_XML_SRC=""
+  p1="$SYSTEM_ROOT/system_ext/etc/fonts_base.xml"
+  p2="$SYSTEM_ROOT/system/system_ext/etc/fonts_base.xml"
+
+  if [ ! -e "$p1" ] && [ ! -L "$p1" ] && [ ! -e "$p2" ] && [ ! -L "$p2" ]; then
+    return 0
+  fi
+
+  if [ -n "$SYSTEM_ROOT" ]; then
+    sys_root_real=$(readlink -f "$SYSTEM_ROOT" 2>/dev/null || :)
+    if [ -z "$sys_root_real" ]; then
+      fail "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml"
+    fi
+  else
+    sys_root_real=""
+  fi
+
+  allow1="$sys_root_real/system_ext/etc/fonts_base.xml"
+  allow2="$sys_root_real/system/system_ext/etc/fonts_base.xml"
+
+  has_p1=0
+  real_p1=""
+  if [ -e "$p1" ] || [ -L "$p1" ]; then
+    if [ ! -f "$p1" ]; then
+      fail "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml"
+    fi
+    real_p1=$(readlink -f "$p1" 2>/dev/null || :)
+    if [ -z "$real_p1" ] || { [ "$real_p1" != "$allow1" ] && [ "$real_p1" != "$allow2" ]; }; then
+      fail "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml"
+    fi
+    has_p1=1
+  fi
+
+  has_p2=0
+  real_p2=""
+  if [ -e "$p2" ] || [ -L "$p2" ]; then
+    if [ ! -f "$p2" ]; then
+      fail "unsupported_partition_font_override:/system/system_ext/etc/fonts_base.xml"
+    fi
+    real_p2=$(readlink -f "$p2" 2>/dev/null || :)
+    if [ -z "$real_p2" ] || { [ "$real_p2" != "$allow1" ] && [ "$real_p2" != "$allow2" ]; }; then
+      fail "unsupported_partition_font_override:/system/system_ext/etc/fonts_base.xml"
+    fi
+    has_p2=1
+  fi
+
+  if [ "$has_p1" -eq 1 ] && [ "$has_p2" -eq 1 ]; then
+    if [ "$real_p1" != "$real_p2" ]; then
+      fail "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml"
+    fi
+    HAS_BASE_XML=1
+    BASE_XML_SRC="$real_p1"
+    return 0
+  fi
+
+  if [ "$has_p1" -eq 1 ]; then
+    # /system_ext/etc/fonts_base.xml exists without /system/system_ext/etc/fonts_base.xml mapping to it
+    fail "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml"
+  fi
+
+  # Only /system/system_ext/etc/fonts_base.xml exists: reject if /system_ext exists as a separate unaliased path
+  if [ -e "$SYSTEM_ROOT/system_ext" ] || [ -L "$SYSTEM_ROOT/system_ext" ]; then
+    fail "unsupported_partition_font_override:/system/system_ext/etc/fonts_base.xml"
+  fi
+
+  HAS_BASE_XML=1
+  BASE_XML_SRC="$real_p2"
+}
+
 check_unsupported_partition_overrides() {
   for extra_cfg in \
     /system_ext/etc/fonts.xml \
     /system_ext/etc/font_fallback.xml \
-    /system_ext/etc/fonts_base.xml \
     /system/system_ext/etc/fonts.xml \
     /system/system_ext/etc/font_fallback.xml \
-    /system/system_ext/etc/fonts_base.xml \
     /product/etc/fonts.xml \
     /product/etc/font_fallback.xml \
     /system/product/etc/fonts.xml \
@@ -274,26 +346,38 @@ check_unsupported_partition_overrides() {
     /odm/etc/fonts.xml \
     /odm/etc/font_fallback.xml
   do
-    if [ -f "$SYSTEM_ROOT$extra_cfg" ]; then
+    if [ -f "$SYSTEM_ROOT$extra_cfg" ] || [ -L "$SYSTEM_ROOT$extra_cfg" ]; then
       fail "unsupported_partition_font_override:$extra_cfg"
     fi
   done
+
+  resolve_system_ext_fonts_base
 }
 
-# 5. Capture original system font configs (preserving existing backup on module upgrade)
-capture_originals() {
+# 5. Stage original system font configs (reusing clean backup on module upgrade)
+stage_originals() {
   src_fallback="$SYSTEM_ROOT/system/etc/font_fallback.xml"
   src_legacy="$SYSTEM_ROOT/system/etc/fonts.xml"
-
-  # If upgrading over an existing installation of our own module, reuse its clean original backup
   old_orig="$ADB_ROOT/modules/$MODID/config/original"
-  if [ ! -s "$ORIGINAL_DIR/etc/font_fallback.xml" ] && [ -s "$old_orig/etc/font_fallback.xml" ] && [ -s "$old_orig/etc/fonts.xml" ]; then
-    mkdir -p "$ORIGINAL_DIR/etc" || fail "backup_mkdir_failed"
-    cp -pf "$old_orig/etc/font_fallback.xml" "$ORIGINAL_DIR/etc/font_fallback.xml" || fail "backup_copy_failed"
-    cp -pf "$old_orig/etc/fonts.xml" "$ORIGINAL_DIR/etc/fonts.xml" || fail "backup_copy_failed"
-  fi
 
-  if [ ! -s "$ORIGINAL_DIR/etc/font_fallback.xml" ] || [ ! -s "$ORIGINAL_DIR/etc/fonts.xml" ]; then
+  staged_orig_fb="$STAGING_DIR/orig/etc/font_fallback.xml"
+  staged_orig_leg="$STAGING_DIR/orig/etc/fonts.xml"
+
+  if [ -s "$ORIGINAL_DIR/etc/font_fallback.xml" ] && [ -s "$ORIGINAL_DIR/etc/fonts.xml" ]; then
+    if grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/etc/font_fallback.xml" 2>/dev/null || \
+       grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/etc/fonts.xml" 2>/dev/null; then
+      fail "live_system_config_already_modified_without_backup"
+    fi
+    cp -pf "$ORIGINAL_DIR/etc/font_fallback.xml" "$staged_orig_fb" || fail "backup_copy_failed"
+    cp -pf "$ORIGINAL_DIR/etc/fonts.xml" "$staged_orig_leg" || fail "backup_copy_failed"
+  elif [ -s "$old_orig/etc/font_fallback.xml" ] && [ -s "$old_orig/etc/fonts.xml" ]; then
+    if grep -q "KSU-NotoSans-" "$old_orig/etc/font_fallback.xml" 2>/dev/null || \
+       grep -q "KSU-NotoSans-" "$old_orig/etc/fonts.xml" 2>/dev/null; then
+      fail "live_system_config_already_modified_without_backup"
+    fi
+    cp -pf "$old_orig/etc/font_fallback.xml" "$staged_orig_fb" || fail "backup_copy_failed"
+    cp -pf "$old_orig/etc/fonts.xml" "$staged_orig_leg" || fail "backup_copy_failed"
+  else
     if [ ! -f "$src_fallback" ]; then
       fail "missing_system_font_fallback_xml"
     fi
@@ -304,9 +388,33 @@ capture_originals() {
     if grep -q "KSU-NotoSans-" "$src_fallback" 2>/dev/null || grep -q "KSU-NotoSans-" "$src_legacy" 2>/dev/null; then
       fail "live_system_config_already_modified_without_backup"
     fi
-    mkdir -p "$ORIGINAL_DIR/etc" || fail "backup_mkdir_failed"
-    cp -pf "$src_fallback" "$ORIGINAL_DIR/etc/font_fallback.xml" || fail "backup_copy_failed"
-    cp -pf "$src_legacy" "$ORIGINAL_DIR/etc/fonts.xml" || fail "backup_copy_failed"
+    cp -pf "$src_fallback" "$staged_orig_fb" || fail "backup_copy_failed"
+    cp -pf "$src_legacy" "$staged_orig_leg" || fail "backup_copy_failed"
+  fi
+
+  if [ "$HAS_BASE_XML" -eq 1 ]; then
+    staged_orig_base="$STAGING_DIR/orig/system_ext/etc/fonts_base.xml"
+    mkdir -p "$STAGING_DIR/orig/system_ext/etc" "$STAGING_DIR/system_ext/etc" || fail "backup_mkdir_failed"
+
+    if [ -s "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" ]; then
+      if grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" 2>/dev/null; then
+        fail "live_system_config_already_modified_without_backup"
+      fi
+      cp -pf "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" "$staged_orig_base" || fail "backup_copy_failed"
+    elif [ -s "$old_orig/system_ext/etc/fonts_base.xml" ]; then
+      if grep -q "KSU-NotoSans-" "$old_orig/system_ext/etc/fonts_base.xml" 2>/dev/null; then
+        fail "live_system_config_already_modified_without_backup"
+      fi
+      cp -pf "$old_orig/system_ext/etc/fonts_base.xml" "$staged_orig_base" || fail "backup_copy_failed"
+    else
+      if [ ! -f "$BASE_XML_SRC" ]; then
+        fail "missing_system_ext_fonts_base_xml"
+      fi
+      if grep -q "KSU-NotoSans-" "$BASE_XML_SRC" 2>/dev/null; then
+        fail "live_system_config_already_modified_without_backup"
+      fi
+      cp -pf "$BASE_XML_SRC" "$staged_orig_base" || fail "backup_copy_failed"
+    fi
   fi
 }
 
@@ -347,29 +455,49 @@ run_prepare() {
   check_ksu_mount_provider
   check_conflicting_modules
   check_unsupported_partition_overrides
-  capture_originals
 
   cleanup_staging
-  mkdir -p "$STAGING_DIR/etc" "$DATA_DIR" || fail "staging_mkdir_failed"
+  mkdir -p "$STAGING_DIR/etc" "$STAGING_DIR/orig/etc" || fail "staging_mkdir_failed"
+  stage_originals
 
   awk -v mode="fallback" -v stats="$STAGING_DIR/fallback.stats" \
-    -f "$AWK_SCRIPT" "$ORIGINAL_DIR/etc/font_fallback.xml" \
+    -f "$AWK_SCRIPT" "$STAGING_DIR/orig/etc/font_fallback.xml" \
     > "$STAGING_DIR/etc/font_fallback.xml" || fail "fallback_xml_transform_failed:$(cat "$STAGING_DIR/fallback.stats" 2>/dev/null)"
 
   verify_generated_xml "$STAGING_DIR/etc/font_fallback.xml" "fallback" "$STAGING_DIR/fallback.stats"
 
   awk -v mode="legacy" -v stats="$STAGING_DIR/legacy.stats" \
-    -f "$AWK_SCRIPT" "$ORIGINAL_DIR/etc/fonts.xml" \
+    -f "$AWK_SCRIPT" "$STAGING_DIR/orig/etc/fonts.xml" \
     > "$STAGING_DIR/etc/fonts.xml" || fail "legacy_xml_transform_failed:$(cat "$STAGING_DIR/legacy.stats" 2>/dev/null)"
 
   verify_generated_xml "$STAGING_DIR/etc/fonts.xml" "legacy" "$STAGING_DIR/legacy.stats"
 
-  mkdir -p "$MODDIR/system/etc" || fail "system_etc_mkdir_failed"
+  if [ "$HAS_BASE_XML" -eq 1 ]; then
+    awk -v mode="base" -v stats="$STAGING_DIR/base.stats" \
+      -f "$AWK_SCRIPT" "$STAGING_DIR/orig/system_ext/etc/fonts_base.xml" \
+      > "$STAGING_DIR/system_ext/etc/fonts_base.xml" || fail "base_xml_transform_failed:$(cat "$STAGING_DIR/base.stats" 2>/dev/null)"
+
+    verify_generated_xml "$STAGING_DIR/system_ext/etc/fonts_base.xml" "base" "$STAGING_DIR/base.stats"
+  fi
+
+  mkdir -p "$ORIGINAL_DIR/etc" "$MODDIR/system/etc" "$DATA_DIR" || fail "system_etc_mkdir_failed"
+  cp -pf "$STAGING_DIR/orig/etc/font_fallback.xml" "$ORIGINAL_DIR/etc/font_fallback.xml" || fail "backup_copy_failed"
+  cp -pf "$STAGING_DIR/orig/etc/fonts.xml" "$ORIGINAL_DIR/etc/fonts.xml" || fail "backup_copy_failed"
   chmod 0644 "$STAGING_DIR/etc/font_fallback.xml" "$STAGING_DIR/etc/fonts.xml" || fail "chmod_failed"
   mv -f "$STAGING_DIR/etc/font_fallback.xml" "$MODDIR/system/etc/font_fallback.xml" || fail "commit_fallback_failed"
   mv -f "$STAGING_DIR/etc/fonts.xml" "$MODDIR/system/etc/fonts.xml" || fail "commit_legacy_failed"
   cp -pf "$STAGING_DIR/fallback.stats" "$DATA_DIR/fallback.stats" 2>/dev/null || :
   cp -pf "$STAGING_DIR/legacy.stats" "$DATA_DIR/legacy.stats" 2>/dev/null || :
+
+  if [ "$HAS_BASE_XML" -eq 1 ]; then
+    mkdir -p "$ORIGINAL_DIR/system_ext/etc" "$MODDIR/system/system_ext/etc" || fail "system_ext_etc_mkdir_failed"
+    cp -pf "$STAGING_DIR/orig/system_ext/etc/fonts_base.xml" "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" || fail "backup_copy_failed"
+    chmod 0644 "$STAGING_DIR/system_ext/etc/fonts_base.xml" || fail "chmod_failed"
+    mv -f "$STAGING_DIR/system_ext/etc/fonts_base.xml" "$MODDIR/system/system_ext/etc/fonts_base.xml" || fail "commit_base_failed"
+    cp -pf "$STAGING_DIR/base.stats" "$DATA_DIR/base.stats" 2>/dev/null || :
+  else
+    rm -rf "$MODDIR/system/system_ext" "$ORIGINAL_DIR/system_ext" "$DATA_DIR/base.stats" 2>/dev/null || :
+  fi
 
   cleanup_staging
   printf 'ok=prepared\n'

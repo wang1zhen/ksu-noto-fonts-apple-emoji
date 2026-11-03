@@ -88,6 +88,8 @@ grep -q "EXCERPT FIXTURE ONLY (NOT COMPLETE DEVICE FILE)" "$ROOT_DIR/tests/fixtu
   fail "font_fallback.excerpt.xml missing excerpt disclaimer"
 grep -q "EXCERPT FIXTURE ONLY (NOT COMPLETE DEVICE FILE)" "$ROOT_DIR/tests/fixtures/fonts.excerpt.xml" || \
   fail "fonts.excerpt.xml missing excerpt disclaimer"
+grep -q "EXCERPT FIXTURE ONLY (NOT COMPLETE DEVICE FILE)" "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" || \
+  fail "fonts_base.excerpt.xml missing excerpt disclaimer"
 pass "excerpt fixtures contain explicit non-complete disclaimer"
 
 # 3. Direct awk transformation + validate_only + independent Python ElementTree verification
@@ -116,6 +118,18 @@ python3 -I "$ROOT_DIR/tests/verify_xml.py" \
   --mode legacy
 pass "legacy XML transformation verified by validate_only and independent ElementTree parser"
 
+awk -v mode="base" -v stats="$TMP_BASE/xml/base.stats" \
+  -f "$ROOT_DIR/module/tools/fontxml.awk" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" > "$TMP_BASE/xml/fonts_base.xml"
+awk -v mode="base" -v validate_only=1 \
+  -f "$ROOT_DIR/module/tools/fontxml.awk" \
+  "$TMP_BASE/xml/fonts_base.xml"
+python3 -I "$ROOT_DIR/tests/verify_xml.py" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" \
+  "$TMP_BASE/xml/fonts_base.xml" \
+  --mode base
+pass "base XML transformation verified by validate_only and independent ElementTree parser"
+
 # 3b. Verify CJK fallbackFor font with child <axis> tags is copied intact into prepended CJK family
 awk '
   /<font weight="400" style="normal" index="2" fallbackFor="serif">NotoSerifCJK-Regular\.ttc<\/font>/ {
@@ -142,8 +156,38 @@ pass "CJK fallbackFor font with child <axis> tags is preserved verbatim in prepe
 assert_fails "reject fallback XML when run in legacy mode" "" \
   awk -v mode="legacy" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/tests/fixtures/font_fallback.excerpt.xml"
 
+assert_fails "reject fallback XML when run in base mode" "" \
+  awk -v mode="base" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/tests/fixtures/font_fallback.excerpt.xml"
+
 assert_fails "reject legacy XML when run in fallback mode" "" \
   awk -v mode="fallback" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/tests/fixtures/fonts.excerpt.xml"
+
+assert_fails "reject legacy XML when run in base mode" "unexpected_base_sans_serif_font|unexpected_unnamed_western_in_base" \
+  awk -v mode="base" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/tests/fixtures/fonts.excerpt.xml"
+
+awk '
+  /<family name="sys-sans-en">/ {
+    print "    <family>"
+    print "        <font supportedAxes=\"wght,ital\">Roboto-Regular.ttf"
+    print "            <axis tag=\"wdth\" stylevalue=\"100\" />"
+    print "        </font>"
+    print "    </family>"
+  }
+  { print }
+' "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" > "$TMP_BASE/xml/base_with_unnamed.xml"
+assert_fails "reject base XML with unexpected unnamed family after sans-serif" "unexpected_unnamed_western_in_base" \
+  awk -v mode="base" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$TMP_BASE/xml/base_with_unnamed.xml"
+
+assert_fails "reject base XML (without unnamed Roboto after sans-serif) when run in legacy mode" "unnamed_western_count_0" \
+  awk -v mode="legacy" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml"
+
+sed '/name="sys-sans-en"/,/<\/family>/d' "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" > "$TMP_BASE/xml/base_no_sys_sans.xml"
+assert_fails "reject base XML missing sys-sans-en" "sys_sans_en_count_0" \
+  awk -v mode="base" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$TMP_BASE/xml/base_no_sys_sans.xml"
+
+sed '/name="op-sans-en"/,/<\/family>/d' "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" > "$TMP_BASE/xml/base_no_op_sans.xml"
+assert_fails "reject base XML missing op-sans-en" "op_sans_en_count_0" \
+  awk -v mode="base" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$TMP_BASE/xml/base_no_op_sans.xml"
 
 # Missing ko family
 sed '/lang="ko"/,/<\/family>/d' "$ROOT_DIR/tests/fixtures/font_fallback.excerpt.xml" > "$TMP_BASE/xml/no_ko.xml"
@@ -689,6 +733,344 @@ assert_fails "reject install when bundled font is missing" "missing_bundled_font
   FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
   sh "$SIM/modpath/customize.sh"
 
+# 5u. 3-XML install with /system_ext/etc/fonts_base.xml + /system/system_ext -> ../system_ext SAR path alias (processed once)
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+
+KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" \
+  FONT_ADB_ROOT="$SIM/adb" \
+  MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh" >/dev/null
+
+[ -f "$SIM/modpath/system/etc/font_fallback.xml" ] || fail "3-XML install: font_fallback.xml not committed"
+[ -f "$SIM/modpath/system/etc/fonts.xml" ] || fail "3-XML install: fonts.xml not committed"
+[ -f "$SIM/modpath/system/system_ext/etc/fonts_base.xml" ] || fail "3-XML install: system/system_ext/etc/fonts_base.xml not committed"
+[ -f "$SIM/modpath/config/original/etc/font_fallback.xml" ] || fail "3-XML install: original/etc/font_fallback.xml missing"
+[ -f "$SIM/modpath/config/original/etc/fonts.xml" ] || fail "3-XML install: original/etc/fonts.xml missing"
+[ -f "$SIM/modpath/config/original/system_ext/etc/fonts_base.xml" ] || fail "3-XML install: original/system_ext/etc/fonts_base.xml missing"
+[ -f "$SIM/modpath/data/base.stats" ] || fail "3-XML install: data/base.stats missing"
+[ ! -d "$SIM/modpath/.staging" ] || fail "3-XML install: .staging not cleaned up"
+python3 -I "$ROOT_DIR/tests/verify_xml.py" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" \
+  "$SIM/modpath/system/system_ext/etc/fonts_base.xml" \
+  --mode base
+pass "3-XML install succeeded with /system_ext/etc/fonts_base.xml + /system/system_ext SAR symlink alias"
+
+# 5v. Reverse path alias (/system/system_ext/etc/fonts_base.xml real file + /system_ext -> system/system_ext symlink)
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system/system_ext/etc/fonts_base.xml"
+ln -s "system/system_ext" "$SIM/sysroot/system_ext"
+
+KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" \
+  FONT_ADB_ROOT="$SIM/adb" \
+  MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh" >/dev/null
+
+python3 -I "$ROOT_DIR/tests/verify_xml.py" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" \
+  "$SIM/modpath/system/system_ext/etc/fonts_base.xml" \
+  --mode base
+pass "3-XML install succeeded with reverse /system_ext -> system/system_ext symlink alias"
+
+# 5w. Reject when /system_ext/etc/fonts_base.xml and /system/system_ext/etc/fonts_base.xml are two independent copies
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc" "$SIM/sysroot/system/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system/system_ext/etc/fonts_base.xml"
+assert_fails "reject when /system_ext/etc/fonts_base.xml and /system/system_ext/etc/fonts_base.xml are independent copies" "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+# 5x. Reject when /system_ext/etc/fonts_base.xml is a symlink to an unknown target or broken symlink
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc" "$SIM/sysroot/vendor_custom"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/vendor_custom/custom_base.xml"
+ln -s "../../vendor_custom/custom_base.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+assert_fails "reject when fonts_base.xml is a symlink to an unknown target path" "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+ln -s "nonexistent_target.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+assert_fails "reject when fonts_base.xml is a broken symlink" "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+# 5y. Reject when /system_ext/etc/fonts_base.xml exists without /system/system_ext mapping (ambiguous mapping)
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+assert_fails "reject when /system_ext/etc/fonts_base.xml has no /system/system_ext alias mapping" "unsupported_partition_font_override:/system_ext/etc/fonts_base.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+# 5z. Reject other /system_ext overrides (/system_ext/etc/fonts.xml and /system_ext/etc/font_fallback.xml)
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+touch "$SIM/sysroot/system_ext/etc/fonts.xml"
+assert_fails "reject /system_ext/etc/fonts.xml override" "unsupported_partition_font_override:/system_ext/etc/fonts.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+touch "$SIM/sysroot/system_ext/etc/font_fallback.xml"
+assert_fails "reject /system_ext/etc/font_fallback.xml override" "unsupported_partition_font_override:/system_ext/etc/font_fallback.xml" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+# 5aa. Upgrade from v1.0.0 backup (has config/original/etc/* only, polluted live /system/etc/*, clean live /system_ext/etc/fonts_base.xml)
+setup_sim_env "$SIM"
+KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" \
+  FONT_ADB_ROOT="$SIM/adb" \
+  MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh" >/dev/null
+
+# Move v1.0.0-style 2-XML install into $ADB_ROOT/modules/$MODID and pollute live /system/etc/*
+mkdir -p "$SIM/adb/modules/ksu_noto_fonts_apple_emoji"
+cp -prf "$SIM/modpath/." "$SIM/adb/modules/ksu_noto_fonts_apple_emoji/"
+cp -pf "$SIM/modpath/system/etc/font_fallback.xml" "$SIM/sysroot/system/etc/font_fallback.xml"
+cp -pf "$SIM/modpath/system/etc/fonts.xml" "$SIM/sysroot/system/etc/fonts.xml"
+rm -rf "$SIM/modpath/config" "$SIM/modpath/system/etc" "$SIM/modpath/system/system_ext" "$SIM/modpath/data"
+
+# Add clean /system_ext/etc/fonts_base.xml + SAR symlink
+mkdir -p "$SIM/sysroot/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+
+KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" \
+  FONT_ADB_ROOT="$SIM/adb" \
+  MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh" >/dev/null
+
+[ -f "$SIM/modpath/config/original/etc/font_fallback.xml" ] || fail "v1.0.0->v1.0.1 upgrade: missing original/etc/font_fallback.xml"
+[ -f "$SIM/modpath/config/original/etc/fonts.xml" ] || fail "v1.0.0->v1.0.1 upgrade: missing original/etc/fonts.xml"
+[ -f "$SIM/modpath/config/original/system_ext/etc/fonts_base.xml" ] || fail "v1.0.0->v1.0.1 upgrade: missing original/system_ext/etc/fonts_base.xml"
+python3 -I "$ROOT_DIR/tests/verify_xml.py" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" \
+  "$SIM/modpath/system/system_ext/etc/fonts_base.xml" \
+  --mode base
+pass "upgrade from v1.0.0 2-XML backup succeeded and captured clean fonts_base.xml backup"
+
+# 5ab. Upgrade from v1.0.1 3-XML backup when all 3 live XMLs already contain KSU markers
+rm -rf "$SIM/adb/modules/ksu_noto_fonts_apple_emoji"
+mkdir -p "$SIM/adb/modules/ksu_noto_fonts_apple_emoji"
+cp -prf "$SIM/modpath/." "$SIM/adb/modules/ksu_noto_fonts_apple_emoji/"
+cp -pf "$SIM/modpath/system/system_ext/etc/fonts_base.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+rm -rf "$SIM/modpath/config" "$SIM/modpath/system/etc" "$SIM/modpath/system/system_ext" "$SIM/modpath/data"
+
+KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" \
+  FONT_ADB_ROOT="$SIM/adb" \
+  MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh" >/dev/null
+
+python3 -I "$ROOT_DIR/tests/verify_xml.py" \
+  "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" \
+  "$SIM/modpath/system/system_ext/etc/fonts_base.xml" \
+  --mode base
+pass "upgrade from v1.0.1 3-XML backup reused all 3 clean backups without double-patching"
+
+# 5ac. Reject when live /system_ext/etc/fonts_base.xml has KSU markers and no backup exists
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+cp -pf "$TMP_BASE/xml/fonts_base.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+assert_fails "reject polluted live fonts_base.xml when no original backup exists" "live_system_config_already_modified_without_backup" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+
+# 5ad. Staging cleanup when 1st and 2nd XMLs succeed and 3rd XML (fonts_base.xml) fails
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+printf '<familyset version="23"><unexpected></familyset>\n' > "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+assert_fails "reject install when 1st and 2nd XMLs succeed and 3rd XML (fonts_base.xml) fails" "base_xml_transform_failed" \
+  env KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/customize.sh"
+if [ -d "$SIM/modpath/.staging" ] || [ -d "$SIM/modpath/system/etc" ] || \
+   [ -d "$SIM/modpath/system/system_ext" ] || [ -d "$SIM/modpath/config" ]; then
+  fail "third-XML failure left .staging, system/etc, system/system_ext, or config behind"
+fi
+pass "cleaned up .staging and prevented any partial commit when 3rd XML (fonts_base.xml) failed"
+
+# 5ae. Staging cleanup on actual SIGTERM during 3rd XML (mode=base) transformation after 1st and 2nd XMLs are staged
+setup_sim_env "$SIM"
+mkdir -p "$SIM/sysroot/system_ext/etc"
+cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+mkdir -p "$TMP_BASE/term_base_bin"
+cat <<EOF > "$TMP_BASE/term_base_bin/awk"
+#!/bin/sh
+for arg in "\$@"; do
+  if [ "\$arg" = "mode=base" ]; then
+    if [ -s "$SIM/modpath/.staging/etc/font_fallback.xml" ] && [ -s "$SIM/modpath/.staging/etc/fonts.xml" ]; then
+      touch "$TMP_BASE/saw_staged_first_two_xmls"
+    fi
+    kill -TERM "\$PPID" 2>/dev/null || :
+    exit 143
+  fi
+done
+exec "$REAL_AWK" "\$@"
+EOF
+chmod 0755 "$TMP_BASE/term_base_bin/awk"
+
+assert_fails "trap SIGTERM during 3rd XML (mode=base) transform and report interrupted" "error=interrupted" \
+  env PATH="$TMP_BASE/term_base_bin:$PATH" KSU=true KSU_VER_CODE=30000 \
+  FONT_CONFIG_ROOT="$SIM/sysroot" FONT_ADB_ROOT="$SIM/adb" MODPATH="$SIM/modpath" \
+  sh "$SIM/modpath/tools/fontconfig.sh" prepare
+[ -f "$TMP_BASE/saw_staged_first_two_xmls" ] || fail "SIGTERM 3rd-XML test did not stage first two XMLs before signal"
+if [ -d "$SIM/modpath/.staging" ] || [ -d "$SIM/modpath/system/etc" ] || \
+   [ -d "$SIM/modpath/system/system_ext" ] || [ -d "$SIM/modpath/config" ]; then
+  fail "SIGTERM during 3rd XML left .staging, system/etc, system/system_ext, or config behind"
+fi
+pass "SIGTERM during 3rd XML (mode=base) transform cleaned up staged files and left zero partial results"
+
+# 5af. BusyBox awk + ash compatibility tests (and full OEM XML validation when root XML files are present)
+BB_BIN="${KSU_TEST_BUSYBOX:-}"
+if [ -n "$BB_BIN" ]; then
+  [ -x "$BB_BIN" ] || fail "KSU_TEST_BUSYBOX is set ($BB_BIN) but not executable"
+elif command -v busybox >/dev/null 2>&1; then
+  BB_BIN=$(command -v busybox)
+elif [ -x /usr/lib/initcpio/busybox ]; then
+  BB_BIN="/usr/lib/initcpio/busybox"
+fi
+
+if [ -f "$ROOT_DIR/font_fallback.xml" ] || [ -f "$ROOT_DIR/fonts.xml" ] || [ -f "$ROOT_DIR/fonts_base.xml" ]; then
+  [ -f "$ROOT_DIR/font_fallback.xml" ] || fail "root OEM XML test: missing $ROOT_DIR/font_fallback.xml"
+  [ -f "$ROOT_DIR/fonts.xml" ] || fail "root OEM XML test: missing $ROOT_DIR/fonts.xml"
+  [ -f "$ROOT_DIR/fonts_base.xml" ] || fail "root OEM XML test: missing $ROOT_DIR/fonts_base.xml"
+  [ -n "$BB_BIN" ] || fail "root OEM XML test requires BusyBox (set KSU_TEST_BUSYBOX or install busybox)"
+fi
+
+if [ -n "$BB_BIN" ]; then
+  BB_DIR="$TMP_BASE/bb_env"
+  mkdir -p "$BB_DIR"
+  for applet in sh ash awk sed grep readlink cp mv rm mkdir chmod chown cat head tail cut tr wc ls ln touch printf test true false env sha256sum; do
+    ln -sf "$BB_BIN" "$BB_DIR/$applet"
+  done
+  ln -sf "$BB_BIN" "$BB_DIR/["
+
+  # BusyBox awk vs system awk/gawk parity on synthetic excerpt fixtures
+  mkdir -p "$TMP_BASE/bb_fixture_xml"
+  for pair in \
+    "fallback:$ROOT_DIR/tests/fixtures/font_fallback.excerpt.xml:fb_fix" \
+    "legacy:$ROOT_DIR/tests/fixtures/fonts.excerpt.xml:leg_fix" \
+    "base:$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml:base_fix"
+  do
+    mode=${pair%%:*}
+    rest=${pair#*:}
+    in_xml=${rest%%:*}
+    tag=${rest#*:}
+    "$BB_BIN" awk -v mode="$mode" -v stats="$TMP_BASE/bb_fixture_xml/$tag.bb.stats" \
+      -f "$ROOT_DIR/module/tools/fontxml.awk" "$in_xml" > "$TMP_BASE/bb_fixture_xml/$tag.bb.xml"
+    "$BB_BIN" awk -v mode="$mode" -v validate_only=1 \
+      -f "$ROOT_DIR/module/tools/fontxml.awk" "$TMP_BASE/bb_fixture_xml/$tag.bb.xml"
+    awk -v mode="$mode" -v stats="$TMP_BASE/bb_fixture_xml/$tag.sys.stats" \
+      -f "$ROOT_DIR/module/tools/fontxml.awk" "$in_xml" > "$TMP_BASE/bb_fixture_xml/$tag.sys.xml"
+    cmp -s "$TMP_BASE/bb_fixture_xml/$tag.bb.xml" "$TMP_BASE/bb_fixture_xml/$tag.sys.xml" || \
+      fail "BusyBox awk vs system awk output mismatch on fixture $tag"
+    cmp -s "$TMP_BASE/bb_fixture_xml/$tag.bb.stats" "$TMP_BASE/bb_fixture_xml/$tag.sys.stats" || \
+      fail "BusyBox awk vs system awk stats mismatch on fixture $tag"
+  done
+  pass "BusyBox awk transformation and validate_only match system awk byte-for-byte on all 3 fixtures"
+
+  # BusyBox ash simulated 3-XML installation on fixtures
+  setup_sim_env "$SIM"
+  mkdir -p "$SIM/sysroot/system_ext/etc"
+  cp -pf "$ROOT_DIR/tests/fixtures/fonts_base.excerpt.xml" "$SIM/sysroot/system_ext/etc/fonts_base.xml"
+  ln -s "../system_ext" "$SIM/sysroot/system/system_ext"
+  PATH="$BB_DIR:$PATH" KSU=true KSU_VER_CODE=30000 \
+    FONT_CONFIG_ROOT="$SIM/sysroot" \
+    FONT_ADB_ROOT="$SIM/adb" \
+    MODPATH="$SIM/modpath" \
+    "$BB_BIN" ash "$SIM/modpath/customize.sh" >/dev/null
+  cmp -s "$SIM/modpath/system/system_ext/etc/fonts_base.xml" "$TMP_BASE/bb_fixture_xml/base_fix.bb.xml" || \
+    fail "BusyBox ash fixture install output mismatch for fonts_base.xml"
+  pass "BusyBox ash + BusyBox awk simulated 3-XML installation succeeded on fixtures"
+
+  # Full OEM XML tests (auto-detected when root font_fallback.xml, fonts.xml, fonts_base.xml exist)
+  if [ -f "$ROOT_DIR/font_fallback.xml" ] && [ -f "$ROOT_DIR/fonts.xml" ] && [ -f "$ROOT_DIR/fonts_base.xml" ]; then
+    OEM_DIR="$TMP_BASE/oem_xml"
+    mkdir -p "$OEM_DIR"
+    for pair in \
+      "fallback:$ROOT_DIR/font_fallback.xml:fb_oem" \
+      "legacy:$ROOT_DIR/fonts.xml:leg_oem" \
+      "base:$ROOT_DIR/fonts_base.xml:base_oem"
+    do
+      mode=${pair%%:*}
+      rest=${pair#*:}
+      in_xml=${rest%%:*}
+      tag=${rest#*:}
+      "$BB_BIN" awk -v mode="$mode" -v stats="$OEM_DIR/$tag.bb.stats" \
+        -f "$ROOT_DIR/module/tools/fontxml.awk" "$in_xml" > "$OEM_DIR/$tag.bb.xml"
+      "$BB_BIN" awk -v mode="$mode" -v validate_only=1 \
+        -f "$ROOT_DIR/module/tools/fontxml.awk" "$OEM_DIR/$tag.bb.xml"
+      awk -v mode="$mode" -v stats="$OEM_DIR/$tag.gawk.stats" \
+        -f "$ROOT_DIR/module/tools/fontxml.awk" "$in_xml" > "$OEM_DIR/$tag.gawk.xml"
+      cmp -s "$OEM_DIR/$tag.bb.xml" "$OEM_DIR/$tag.gawk.xml" || \
+        fail "Full OEM XML ($tag): BusyBox awk vs gawk output mismatch"
+      cmp -s "$OEM_DIR/$tag.bb.stats" "$OEM_DIR/$tag.gawk.stats" || \
+        fail "Full OEM XML ($tag): BusyBox awk vs gawk stats mismatch"
+      python3 -I "$ROOT_DIR/tests/verify_xml.py" "$in_xml" "$OEM_DIR/$tag.bb.xml" --mode "$mode"
+    done
+    pass "full OEM XMLs (font_fallback.xml, fonts.xml, fonts_base.xml) verified with BusyBox awk, validate_only, gawk parity, and verify_xml.py"
+
+    assert_fails "reject full OEM fonts_base.xml when run in legacy mode" "unnamed_western_count_0" \
+      "$BB_BIN" awk -v mode="legacy" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/fonts_base.xml"
+
+    assert_fails "reject full OEM fonts.xml when run in base mode" "unexpected_base_sans_serif_font|unexpected_unnamed_western_in_base" \
+      "$BB_BIN" awk -v mode="base" -v stats="/dev/stderr" -f "$ROOT_DIR/module/tools/fontxml.awk" "$ROOT_DIR/fonts.xml"
+
+    # Full BusyBox ash simulated installation with the 3 real OEM XMLs and SAR path alias
+    OEM_SIM="$TMP_BASE/oem_sim"
+    setup_sim_env "$OEM_SIM"
+    cp -pf "$ROOT_DIR/font_fallback.xml" "$OEM_SIM/sysroot/system/etc/font_fallback.xml"
+    cp -pf "$ROOT_DIR/fonts.xml" "$OEM_SIM/sysroot/system/etc/fonts.xml"
+    mkdir -p "$OEM_SIM/sysroot/system_ext/etc"
+    cp -pf "$ROOT_DIR/fonts_base.xml" "$OEM_SIM/sysroot/system_ext/etc/fonts_base.xml"
+    ln -s "../system_ext" "$OEM_SIM/sysroot/system/system_ext"
+
+    PATH="$BB_DIR:$PATH" KSU=true KSU_VER_CODE=30000 \
+      FONT_CONFIG_ROOT="$OEM_SIM/sysroot" \
+      FONT_ADB_ROOT="$OEM_SIM/adb" \
+      MODPATH="$OEM_SIM/modpath" \
+      "$BB_BIN" ash "$OEM_SIM/modpath/customize.sh" >/dev/null
+
+    cmp -s "$OEM_SIM/modpath/system/etc/font_fallback.xml" "$OEM_DIR/fb_oem.bb.xml" || \
+      fail "BusyBox ash full OEM install: font_fallback.xml output mismatch"
+    cmp -s "$OEM_SIM/modpath/system/etc/fonts.xml" "$OEM_DIR/leg_oem.bb.xml" || \
+      fail "BusyBox ash full OEM install: fonts.xml output mismatch"
+    cmp -s "$OEM_SIM/modpath/system/system_ext/etc/fonts_base.xml" "$OEM_DIR/base_oem.bb.xml" || \
+      fail "BusyBox ash full OEM install: fonts_base.xml output mismatch"
+    cmp -s "$OEM_SIM/modpath/config/original/etc/font_fallback.xml" "$ROOT_DIR/font_fallback.xml" || \
+      fail "BusyBox ash full OEM install: original font_fallback.xml backup mismatch"
+    cmp -s "$OEM_SIM/modpath/config/original/etc/fonts.xml" "$ROOT_DIR/fonts.xml" || \
+      fail "BusyBox ash full OEM install: original fonts.xml backup mismatch"
+    cmp -s "$OEM_SIM/modpath/config/original/system_ext/etc/fonts_base.xml" "$ROOT_DIR/fonts_base.xml" || \
+      fail "BusyBox ash full OEM install: original fonts_base.xml backup mismatch"
+    pass "BusyBox ash simulated 3-XML installation succeeded on full OEM XMLs with SAR alias and clean backups"
+  fi
+fi
+
 # 6. ZIP verifier negative tests using synthetic mini lockfile & ZIPs
 MINI_DIR="$TMP_BASE/zip_tests"
 mkdir -p "$MINI_DIR"
@@ -709,8 +1091,17 @@ def make_zip(path, entries):
         for k, v in entries.items():
             zf.writestr(k, v)
 
+valid_prop = (
+    b"id=ksu_noto_fonts_apple_emoji\n"
+    b"name=Noto Sans + Noto Sans CJK + Apple Emoji (OOS16)\n"
+    b"version=v1.0.1\n"
+    b"versionCode=101\n"
+    b"author=wang1zhen\n"
+    b"description=Test\n"
+)
+
 valid_entries = {
-    "module.prop": b"id=test\n",
+    "module.prop": valid_prop,
     "customize.sh": b"#!/system/bin/sh\n",
     "NOTICE.md": b"notice\n",
     "tools/fontconfig.sh": b"#!/system/bin/sh\n",
@@ -720,6 +1111,8 @@ valid_entries = {
 }
 
 make_zip(f"{base}/valid.zip", valid_entries)
+make_zip(f"{base}/ksu-noto-fonts-apple-emoji-v1.0.1.zip", valid_entries)
+make_zip(f"{base}/ksu-noto-fonts-apple-emoji-v1.0.0.zip", valid_entries)
 
 missing_entries = dict(valid_entries)
 del missing_entries["tools/fontxml.awk"]
@@ -737,12 +1130,29 @@ prebaked_entries = dict(valid_entries)
 prebaked_entries["system/etc/fonts.xml"] = b"<familyset/>\n"
 make_zip(f"{base}/prebaked.zip", prebaked_entries)
 
+prebaked_base_entries = dict(valid_entries)
+prebaked_base_entries["system/system_ext/etc/fonts_base.xml"] = b"<familyset/>\n"
+make_zip(f"{base}/prebaked_base.zip", prebaked_base_entries)
+
+leaked_log_entries = dict(valid_entries)
+leaked_log_entries["KernelSU_Next_install_log.log"] = b"log\n"
+make_zip(f"{base}/leaked_log.zip", leaked_log_entries)
+
+bad_author_entries = dict(valid_entries)
+bad_author_entries["module.prop"] = valid_prop.replace(b"author=wang1zhen", b"author=wrong")
+make_zip(f"{base}/bad_author.zip", bad_author_entries)
+
+no_version_entries = dict(valid_entries)
+no_version_entries["module.prop"] = valid_prop.replace(b"version=v1.0.1\n", b"")
+make_zip(f"{base}/no_version.zip", no_version_entries)
+
 with open(f"{base}/corrupt.zip", "wb") as f:
     f.write(b"not a zip file at all")
 PYEOF
 
 FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/valid.zip" >/dev/null
-pass "verify_zip.sh accepted valid synthetic ZIP"
+FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/ksu-noto-fonts-apple-emoji-v1.0.1.zip" >/dev/null
+pass "verify_zip.sh accepted valid synthetic ZIP and matching v1.0.1 release filename"
 
 assert_fails "verify_zip.sh rejects missing required file" "missing required files" \
   env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/missing.zip"
@@ -753,8 +1163,23 @@ assert_fails "verify_zip.sh rejects tampered font SHA-256" "SHA-256 mismatch" \
 assert_fails "verify_zip.sh rejects path traversal entry" "unsafe relative path traversal" \
   env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/traversal.zip"
 
-assert_fails "verify_zip.sh rejects pre-baked system/etc XML" "pre-baked system/etc config is forbidden" \
+assert_fails "verify_zip.sh rejects pre-baked system/etc XML" "pre-baked system/etc config" \
   env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/prebaked.zip"
+
+assert_fails "verify_zip.sh rejects pre-baked system/system_ext/etc/fonts_base.xml" "pre-baked system/etc config or device XML/log is forbidden" \
+  env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/prebaked_base.zip"
+
+assert_fails "verify_zip.sh rejects leaked install log in ZIP" "pre-baked system/etc config or device XML/log is forbidden" \
+  env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/leaked_log.zip"
+
+assert_fails "verify_zip.sh rejects wrong author in module.prop" "invalid module.prop author=" \
+  env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/bad_author.zip"
+
+assert_fails "verify_zip.sh rejects missing version in module.prop" "missing required key 'version'" \
+  env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/no_version.zip"
+
+assert_fails "verify_zip.sh rejects ZIP filename version mismatch" "ZIP filename mismatch" \
+  env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/ksu-noto-fonts-apple-emoji-v1.0.0.zip"
 
 assert_fails "verify_zip.sh rejects corrupted non-ZIP file" "not a valid ZIP archive" \
   env FONT_LOCK_FILE="$MINI_LOCK" sh "$ROOT_DIR/scripts/verify_zip.sh" "$MINI_DIR/corrupt.zip"

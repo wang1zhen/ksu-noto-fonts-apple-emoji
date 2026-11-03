@@ -22,8 +22,20 @@ fail() {
 [ -f "$LOCK_FILE" ] || fail "sources.lock not found at $LOCK_FILE"
 [ -f "$ROOT_DIR/module/module.prop" ] || fail "module/module.prop not found"
 
+MOD_ID=$(sed -n 's/^id=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
 MOD_VERSION=$(sed -n 's/^version=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
-[ -n "$MOD_VERSION" ] || MOD_VERSION="v1.0.0"
+MOD_VERSION_CODE=$(sed -n 's/^versionCode=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
+MOD_AUTHOR=$(sed -n 's/^author=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
+
+[ -n "$MOD_ID" ] || fail "missing id in module/module.prop"
+[ -n "$MOD_VERSION" ] || fail "missing version in module/module.prop"
+[ -n "$MOD_VERSION_CODE" ] || fail "missing versionCode in module/module.prop"
+[ -n "$MOD_AUTHOR" ] || fail "missing author in module/module.prop"
+
+[ "$MOD_ID" = "ksu_noto_fonts_apple_emoji" ] || fail "unexpected id in module/module.prop: $MOD_ID"
+[ "$MOD_VERSION" = "v1.0.1" ] || fail "unexpected version in module/module.prop: $MOD_VERSION (expected v1.0.1)"
+[ "$MOD_VERSION_CODE" = "101" ] || fail "unexpected versionCode in module/module.prop: $MOD_VERSION_CODE (expected 101)"
+[ "$MOD_AUTHOR" = "wang1zhen" ] || fail "unexpected author in module/module.prop: $MOD_AUTHOR (expected wang1zhen)"
 
 mkdir -p "$CACHE_DIR"
 rm -rf "$BUILD_DIR"

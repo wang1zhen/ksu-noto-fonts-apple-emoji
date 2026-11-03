@@ -4,3 +4,8 @@ dist/
 skills/
 *.pyc
 __pycache__/
+/font_fallback.xml
+/fonts.xml
+/fonts_base.xml
+/KernelSU_Next_install_log*.log
+/*.log

@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck curl coreutils
+          sudo apt-get install -y shellcheck busybox curl coreutils
           python3 -m pip install --upgrade pip fonttools
 
       - name: Run regression tests

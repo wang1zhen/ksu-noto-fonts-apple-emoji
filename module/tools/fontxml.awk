@@ -1,7 +1,8 @@
 # BusyBox awk XML transformer and finite-format validator for Android / OxygenOS 16 font configs.
-# Supports two explicit modes (-v mode="fallback" or -v mode="legacy"):
+# Supports three explicit modes (-v mode="fallback", -v mode="legacy", or -v mode="base"):
 #   - fallback: modern VF configuration (font_fallback.xml, root <familyset> without version)
-#   - legacy:   compat configuration (fonts.xml, root <familyset version="...">)
+#   - legacy:   compat configuration (fonts.xml, root <familyset version="..."> with unnamed Roboto after sans-serif)
+#   - base:     system_ext base configuration (fonts_base.xml, root <familyset version="..."> without unnamed Roboto after sans-serif)
 # Also supports -v validate_only=1 to validate generated XML output using the same
 # finite-format state machine and style-uniqueness checks instead of tag counting.
 #
@@ -275,9 +276,9 @@ function handle_xml_tag(raw_tag,    inner, cname, is_self_closing, tname, attr_s
     if (mode == "fallback" && ("version" in parsed_attrs)) {
       fail_xml("unexpected_version_in_fallback_familyset")
     }
-    if (mode == "legacy") {
+    if (mode == "legacy" || mode == "base") {
       if (familyset_version == "" || familyset_version !~ /^[0-9]+$/) {
-        fail_xml("missing_or_invalid_version_in_legacy_familyset")
+        fail_xml("missing_or_invalid_version_in_" mode "_familyset")
       }
     }
     saw_familyset_open = 1
@@ -555,9 +556,20 @@ function process_family(    raw_block, clean_block, open_end, header, indent,
   }
 
   # 1. Western default sans-serif and OxygenOS English sans families
-  if (fam_name == "sans-serif" || (mode == "legacy" && (fam_name == "sys-sans-en" || fam_name == "op-sans-en"))) {
+  if (fam_name == "sans-serif" || ((mode == "legacy" || mode == "base") && (fam_name == "sys-sans-en" || fam_name == "op-sans-en"))) {
     if (fam_lang != "" || fam_ignore == "true" || !has_font) {
       fail_xml("invalid_western_family_" fam_name)
+    }
+    if (mode == "base") {
+      if (fam_name == "sans-serif" && clean_block !~ /Roboto-Regular\.ttf/) {
+        fail_xml("unexpected_base_sans_serif_font")
+      }
+      if (fam_name == "sys-sans-en" && clean_block !~ /SysSans-En-Regular\.ttf/) {
+        fail_xml("unexpected_base_sys_sans_en_font")
+      }
+      if (fam_name == "op-sans-en" && clean_block !~ /OPSans-En-Regular\.ttf/) {
+        fail_xml("unexpected_base_op_sans_en_font")
+      }
     }
     print indent "<family name=\"" get_attr(header, "name") "\">"
     if (mode == "fallback") {
@@ -579,10 +591,13 @@ function process_family(    raw_block, clean_block, open_end, header, indent,
     return
   }
 
-  # 2. Unnamed default family right after sans-serif in legacy fonts.xml
-  if (mode == "legacy" && prev_was_sans_serif == 1 && fam_name == "" && fam_lang == "" && fam_ignore != "true" && count_unnamed_western == 0) {
-    prev_was_sans_serif = 0
-    if (clean_block ~ /Roboto-Regular\.ttf/) {
+  # 2. Unnamed default family right after sans-serif in legacy fonts.xml (rejected in base mode)
+  if (prev_was_sans_serif == 1 && fam_name == "" && fam_lang == "" && fam_ignore != "true") {
+    if (mode == "base") {
+      fail_xml("unexpected_unnamed_western_in_base")
+    }
+    if (mode == "legacy" && count_unnamed_western == 0 && clean_block ~ /Roboto-Regular\.ttf/) {
+      prev_was_sans_serif = 0
       if (!has_font) {
         fail_xml("empty_unnamed_western_family")
       }
@@ -692,7 +707,7 @@ function validate_family_block(clean_block, header, open_end, fam_name, fam_lang
   if (!has_font) {
     fail_xml("empty_family_in_validate")
   }
-  if (fam_name == "sans-serif" || (mode == "legacy" && (fam_name == "sys-sans-en" || fam_name == "op-sans-en"))) {
+  if (fam_name == "sans-serif" || ((mode == "legacy" || mode == "base") && (fam_name == "sys-sans-en" || fam_name == "op-sans-en"))) {
     if (fam_lang != "" || fam_ignore == "true") {
       fail_xml("invalid_western_family_" fam_name)
     }
@@ -712,11 +727,16 @@ function validate_family_block(clean_block, header, open_end, fam_name, fam_lang
     return
   }
 
-  if (mode == "legacy" && prev_was_sans_serif == 1 && fam_name == "" && fam_lang == "" && fam_ignore != "true" && count_unnamed_western == 0) {
-    prev_was_sans_serif = 0
-    if (clean_block ~ /KSU-NotoSans-Regular-VF\.ttf/ && clean_block ~ /KSU-NotoSans-Italic-VF\.ttf/) {
-      count_unnamed_western++
-      return
+  if (prev_was_sans_serif == 1 && fam_name == "" && fam_lang == "" && fam_ignore != "true") {
+    if (mode == "base") {
+      fail_xml("unexpected_unnamed_western_in_base")
+    }
+    if (mode == "legacy" && count_unnamed_western == 0) {
+      prev_was_sans_serif = 0
+      if (clean_block ~ /KSU-NotoSans-Regular-VF\.ttf/ && clean_block ~ /KSU-NotoSans-Italic-VF\.ttf/) {
+        count_unnamed_western++
+        return
+      }
     }
   }
   prev_was_sans_serif = 0
@@ -803,7 +823,7 @@ function validate_family_block(clean_block, header, open_end, fam_name, fam_lang
 }
 
 BEGIN {
-  if (mode != "fallback" && mode != "legacy") {
+  if (mode != "fallback" && mode != "legacy" && mode != "base") {
     fail_xml("invalid_mode_" mode)
   }
   validate_only = (validate_only == 1 || validate_only == "1" || validate_only == "true") ? 1 : 0
@@ -944,7 +964,18 @@ END {
     if (count_op_sans_en != 1) {
       fail_xml("op_sans_en_count_" count_op_sans_en)
     }
-    if (validate_only && count_unnamed_western != 1) {
+    if (count_unnamed_western != 1) {
+      fail_xml("unnamed_western_count_" count_unnamed_western)
+    }
+  }
+  if (mode == "base") {
+    if (count_sys_sans_en != 1) {
+      fail_xml("sys_sans_en_count_" count_sys_sans_en)
+    }
+    if (count_op_sans_en != 1) {
+      fail_xml("op_sans_en_count_" count_op_sans_en)
+    }
+    if (count_unnamed_western != 0) {
       fail_xml("unnamed_western_count_" count_unnamed_western)
     }
   }

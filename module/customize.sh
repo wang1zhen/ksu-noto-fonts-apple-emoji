@@ -62,16 +62,22 @@ prep_rc=$?
 if [ "$prep_rc" -ne 0 ]; then
   ui_print "! Font configuration adaptation failed:"
   ui_print "! $prep_out"
-  rm -rf "$MODPATH/.staging" "$MODPATH/system/etc" 2>/dev/null || :
+  rm -rf "$MODPATH/.staging" "$MODPATH/system/etc" "$MODPATH/system/system_ext" 2>/dev/null || :
   abort "! Installation aborted safely without modifying system partitions"
 fi
 
 ui_print "- Adapted /system/etc/font_fallback.xml and /system/etc/fonts.xml"
+if [ -f "$MODPATH/system/system_ext/etc/fonts_base.xml" ]; then
+  ui_print "- Adapted /system_ext/etc/fonts_base.xml"
+fi
 if [ -f "$MODPATH/data/fallback.stats" ]; then
   ui_print "- Fallback stats: $(cat "$MODPATH/data/fallback.stats" 2>/dev/null)"
 fi
 if [ -f "$MODPATH/data/legacy.stats" ]; then
   ui_print "- Legacy stats:   $(cat "$MODPATH/data/legacy.stats" 2>/dev/null)"
+fi
+if [ -f "$MODPATH/data/base.stats" ]; then
+  ui_print "- Base stats:     $(cat "$MODPATH/data/base.stats" 2>/dev/null)"
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644

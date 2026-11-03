@@ -4,10 +4,10 @@
 - **西文默认无衬线 (`sans-serif` / `sys-sans-en` / `op-sans-en`)**：使用官方 `Noto Sans` 可变字体（独立正体 `KSU-NotoSans-Regular-VF.ttf` 与真斜体 `KSU-NotoSans-Italic-VF.ttf`，宽度轴 `wdth` 固定为 `100`，字重覆盖 `100..900`）。
 - **中日韩按 Locale 路由 (`zh-Hans` / `zh-Hant,zh-Bopo` / `ja` / `ko`)**：保留原系统 CJK `<family>` 块完整不变，并在其前方插入独立的 `<family lang="...">`；新家族内放置完整版 `Noto Sans CJK SC / TC / JP / KR` 可变字体 (`KSU-NotoSansCJK{sc,tc,jp,kr}-VF.ttf`) 及原家族中全部带 `fallbackFor` 的完整 `<font>` 元素副本（含 `<axis>` 子标签）。该结构既避免在单个 `FontFamily.Builder` 实例内产生同 `(fallbackFor, weight, style)` 重复样式异常，又确保 `serif` 等专用回退链首选仍为原系统衬线字体、普通无衬线链首选切换为新 `Noto Sans CJK`，同时保留原系统 CJK 家族与第二个日文假名家族 (`NotoSerifHentaigana.ttf`) 作为后备。
 - **Emoji (`und-Zsye`)**：在首个有效 Emoji 家族前插入 `samuelngs/apple-emoji-ttf` 的 Linux `CBDT/CBLC` 彩色位图字体 (`KSU-AppleColorEmoji.ttf`)，保留 `ignore="true"` 的 `NotoColorEmojiLegacy.ttf`、系统 `NotoColorEmoji.ttf` 与旗帜字体 `NotoColorEmojiFlags.ttf` 作为缺字回退。
-- **最小安全与有限格式设计**：安装时在设备端基于真实 `/system/etc/font_fallback.xml` 与 `/system/etc/fonts.xml` 动态生成并通过 `validate_only` 状态机校验模块配置，不覆盖通用整份 XML；不包含 WebUI、后台常驻服务、自定义挂载脚本或 SELinux 放宽规则。
+- **最小安全与有限格式设计**：安装时在设备端基于真实 `/system/etc/font_fallback.xml`、`/system/etc/fonts.xml` 以及（若存在）`/system_ext/etc/fonts_base.xml`（含 `/system/system_ext/etc/fonts_base.xml` 规范化路径别名）动态生成并通过 `validate_only` 状态机校验模块配置，分别输出至 `$MODDIR/system/etc/` 与 `$MODDIR/system/system_ext/etc/fonts_base.xml`，原始备份保存于 `config/original/etc/` 与 `config/original/system_ext/etc/fonts_base.xml`；不预置覆盖通用整份 XML，不包含 WebUI、后台常驻服务、自定义挂载脚本或 SELinux 放宽规则。
 
 > [!IMPORTANT]
-> **未真机验证说明**：当前仓库已完成主机端字体表结构校验（`fontTools`）、基于节选 Fixture 的 XML 转换与有限格式状态机测试、以及模拟 KernelSU 安装生命周期测试，但**尚未在 OnePlus 13 (Android 16 / OxygenOS 16) 真机上刷入与实机视觉验收**。
+> **未真机验证说明**：当前 v1.0.1 仓库已完成主机端字体表结构校验（`fontTools`）、节选 Fixture 及本地三份完整 OEM XML（`font_fallback.xml` / `fonts.xml` / `fonts_base.xml`）的 BusyBox `awk` / `gawk` 转换与有限格式状态机校验、以及 BusyBox `ash` 模拟 KernelSU 安装生命周期测试，但 **v1.0.1 尚未在 OnePlus 13 (Android 16 / OxygenOS 16) 真机上重新刷入与实机视觉验收**。
 
 ---
 
@@ -17,7 +17,7 @@
 - [`module/`](module/)：KernelSU 模块源码（[`module.prop`](module/module.prop)、[`customize.sh`](module/customize.sh)、[`tools/fontconfig.sh`](module/tools/fontconfig.sh)、[`tools/fontxml.awk`](module/tools/fontxml.awk)）。
 - [`tools/check_fonts.py`](tools/check_fonts.py)：主机端 `fontTools` 校验器（检查字体族名、PostScript 名称、可变轴范围、代表字符覆盖率、完整 CJK 码表规模及 Emoji `CBDT/CBLC` 位图表）。
 - [`scripts/build.sh`](scripts/build.sh)：拉取/校验锁定资产、运行字体校验并构建可安装模块 ZIP 与 `.sha256` 清单。
-- [`scripts/verify_zip.sh`](scripts/verify_zip.sh)：校验产出的模块 ZIP 完整性、路径安全、必需文件与字体 SHA-256。
+- [`scripts/verify_zip.sh`](scripts/verify_zip.sh)：校验产出的模块 ZIP 完整性、路径安全、必需文件、`module.prop` 元数据与字体 SHA-256。
 - [`tests/`](tests/)：回归测试套件（[`tests/run.sh`](tests/run.sh)、[`tests/verify_xml.py`](tests/verify_xml.py) 及明确标注为节选的 [`tests/fixtures/`](tests/fixtures/)）。
 - [`NOTICE.md`](NOTICE.md) & [`licenses/`](licenses/)：上游许可证原文与真实版权/资产说明。
 
@@ -26,7 +26,7 @@
 ## 本地构建与验证
 
 ### 依赖要求
-- POSIX `sh`、`awk`、`curl`（或 `wget`）、`sha256sum`
+- POSIX `sh`、`awk`（推荐同时安装 `busybox` 以执行 BusyBox `awk`/`ash` 兼容测试）、`curl`（或 `wget`）、`sha256sum`
 - `python3` 及 `fontTools` 库（仅主机端构建与校验使用，设备端安装不依赖 Python）
 - `shellcheck`（用于静态检查脚本）
 
@@ -41,12 +41,12 @@ sh scripts/build.sh
 
 # 3. 单独校验构建目录字体与打包产物
 python3 -I tools/check_fonts.py build/fonts
-sh scripts/verify_zip.sh dist/*.zip
+sh scripts/verify_zip.sh dist/ksu-noto-fonts-apple-emoji-v1.0.1.zip
 ```
 
 构建完成后，可安装模块包位于：
-- `dist/ksu-noto-fonts-apple-emoji-v1.0.0.zip`
-- `dist/ksu-noto-fonts-apple-emoji-v1.0.0.zip.sha256`
+- `dist/ksu-noto-fonts-apple-emoji-v1.0.1.zip`
+- `dist/ksu-noto-fonts-apple-emoji-v1.0.1.zip.sha256`
 
 ---
 
@@ -54,7 +54,7 @@ sh scripts/verify_zip.sh dist/*.zip
 
 ### 前置条件
 1. **KernelSU 与挂载提供者 (Metamodule)**：
-   - 本模块本身不包含挂载脚本，也不自行执行 `mount`，完全依赖 KernelSU 的 metamodule 机制挂载 `$MODDIR/system`（入口脚本为 `metamount.sh`）。
+   - 本模块本身不包含挂载脚本，也不自行执行 `mount`，完全依赖 KernelSU 的 metamodule 机制（如 `mmrs` / `meta-overlayfs`）挂载 `$MODDIR/system`（入口脚本为 `metamount.sh`）。
    - 安装时 [`fontconfig.sh`](module/tools/fontconfig.sh) 会严格检查静态 metamodule 入口：
      - 校验目标目录未被标记 `disable` 或 `remove`，具备包含非空 `id=` 与 `metamodule=1`（或 `true`）的普通文件 `module.prop`，且存在**非空普通文件 `metamount.sh`**；
      - 若存在 `/data/adb/metamodule` 符号链接则解析其真实目标，断链、缺少 `metamount.sh` 的空壳目录或多个冲突 metamodule 候选均会被拒绝；
@@ -63,15 +63,17 @@ sh scripts/verify_zip.sh dist/*.zip
      - 不使用任何基于 `KSU_VER_CODE` 版本号的旧版挂载推断或 `KSU_LEGACY_MOUNT_OK` 环境变量绕过。
    - **重要说明**：安装阶段对 `metamount.sh` 的检查仅代表静态入口文件存在，**不代表重启后实际运行时挂载一定成功**；重启后需按下方步骤确认 `/system/fonts/KSU-*` 是否实际生效。
 2. **无冲突字体模块**：
-   - 请先禁用或卸载其他修改 `/system/fonts` 或 `/system/etc/fonts*.xml` 的模块，否则安装脚本会检测到冲突并拒绝安装。
+   - 请先禁用或卸载其他修改 `/system/fonts`、`/system/etc/fonts*.xml` 或 `/system/system_ext/etc/fonts*.xml` 的模块，否则安装脚本会检测到冲突并拒绝安装。
 
 ### 安装步骤
-1. 将 `dist/ksu-noto-fonts-apple-emoji-v1.0.0.zip` 传输至手机。
+1. 将 `dist/ksu-noto-fonts-apple-emoji-v1.0.1.zip` 传输至手机。
 2. 打开 KernelSU 管理器 -> 模块 -> 从本地安装，选择该 ZIP 包。
 3. 确认安装日志输出：
    - `- Adapted /system/etc/font_fallback.xml and /system/etc/fonts.xml`
+   - `- Adapted /system_ext/etc/fonts_base.xml`（当设备存在受支持的 `fonts_base.xml` 时）
    - `- Fallback stats: OK mode=fallback ...`
    - `- Legacy stats:   OK mode=legacy ...`
+   - `- Base stats:     OK mode=base ...`（当设备存在受支持的 `fonts_base.xml` 时）
    - `- Static metamodule entrypoint (metamount.sh) verified; actual mount occurs on reboot.`
 4. 重启设备使字体挂载生效。
 
@@ -84,16 +86,18 @@ sh scripts/verify_zip.sh dist/*.zip
 ```sh
 # 1. 检查模块生成的配置文件与原始备份是否存在
 ls -l /data/adb/modules/ksu_noto_fonts_apple_emoji/system/etc/
+ls -l /data/adb/modules/ksu_noto_fonts_apple_emoji/system/system_ext/etc/
 ls -l /data/adb/modules/ksu_noto_fonts_apple_emoji/config/original/etc/
+ls -l /data/adb/modules/ksu_noto_fonts_apple_emoji/config/original/system_ext/etc/
 
 # 2. 检查系统分区是否已由 metamodule 在运行时成功挂载模块字体与配置
 ls -l /system/fonts/KSU-*
-grep -n "KSU-" /system/etc/font_fallback.xml /system/etc/fonts.xml
+grep -n "KSU-" /system/etc/font_fallback.xml /system/etc/fonts.xml /system_ext/etc/fonts_base.xml
 ```
 
 **真机视觉验收建议**：
 - 检查西文常规/粗体/斜体 (`100..900` 字重与真斜体) 显示。
-- 切换文本语言标注 (`zh-Hans`、`zh-Hant`、`ja`、`ko`) 检查异体字形（如 `骨`、`直`、`曜`、`国/國`、假名与谚文）是否随 locale 正确切换，同时确认衬线 (`serif`) 文本仍保持衬线字形。
+- 切换文本语言标注 (`zh-Hans`、`zh-Hant`、`ja`、`ko`) 检查异体字形（如 `骨`、`直`、`曜`、`国/國`、假名与谚文）是否随 locale 正确切换，同时确认衬线 (`serif` / `sys-serif`) 文本仍保持衬线字形。
 - 检查常用 Emoji、肤色修饰符、ZWJ 组合序列及旗帜回退是否正常渲染。
 
 ---
@@ -102,7 +106,7 @@ grep -n "KSU-" /system/etc/font_fallback.xml /system/etc/fonts.xml
 
 - **正常禁用/卸载**：在 KernelSU 管理器中禁用或卸载 `Noto Sans + Noto Sans CJK + Apple Emoji (OOS16)` 模块并重启，系统即恢复原始字体。
 - **救砖/安全模式恢复**：
-  - 本模块绝不直接写入真实 `/system` 分区，所有更改均位于 `/data/adb/modules/ksu_noto_fonts_apple_emoji`。
+  - 本模块绝不直接写入真实 `/system` 或 `/system_ext` 分区，所有更改均位于 `/data/adb/modules/ksu_noto_fonts_apple_emoji`。
   - 若遇到无法进入桌面或显示异常，可在开机时触发 KernelSU 安全模式（如连续按音量下键），或在恢复模式 / ADB root shell 下执行：
     ```sh
     touch /data/adb/modules/ksu_noto_fonts_apple_emoji/disable
@@ -116,13 +120,13 @@ grep -n "KSU-" /system/etc/font_fallback.xml /system/etc/fonts.xml
 1. **OTA 更新前**：
    - 请在 KernelSU 管理器中**禁用或卸载**本模块并重启，确保系统处于未挂载字体覆盖状态后再下载并安装 OxygenOS 系统 OTA。
 2. **OTA 更新后**：
-   - 由于新系统版本的 `/system/etc/font_fallback.xml` 或 `/system/etc/fonts.xml` 可能发生变动，请勿直接重新启用旧模块缓存的备份；建议**先卸载旧模块（或删除 `/data/adb/modules/ksu_noto_fonts_apple_emoji/config/original`）后重新刷入本模块 ZIP**，以便基于 OTA 后的新系统原件重新生成适配配置。
+   - 由于新系统版本的 `/system/etc/font_fallback.xml`、`/system/etc/fonts.xml` 或 `/system_ext/etc/fonts_base.xml` 可能发生变动，请勿直接重新启用旧模块缓存的备份；建议**先卸载旧模块（或删除 `/data/adb/modules/ksu_noto_fonts_apple_emoji/config/original`）后重新刷入本模块 ZIP**，以便基于 OTA 后的新系统原件重新生成适配配置。
 
 ---
 
 ## 已知边界与限制
 
-- **有限 XML 格式约束**：[`fontxml.awk`](module/tools/fontxml.awk) 采用白名单状态机校验单 `<familyset>` 根、`family -> font -> axis` 嵌套及顶层 `<alias .../>`；要求 `<family ...>` 开标签与 `</family>` 闭标签各自独占逻辑行，且同一 `<family>` 内按 `(fallbackFor, weight, style)` 分组的字体样式必须唯一。若设备 XML 含未知标签、同逻辑行多 `<family>`、未闭合标签/注释、根闭合后额外内容、目标 CJK `<family>` 含 `lang` 以外的未知属性或缺少 `fallbackFor` 回退项，转换器将显式拒绝并中止安装。
+- **有限 XML 格式约束**：[`fontxml.awk`](module/tools/fontxml.awk) 采用白名单状态机校验单 `<familyset>` 根、`family -> font -> axis` 嵌套及顶层 `<alias .../>`；要求 `<family ...>` 开标签与 `</family>` 闭标签各自独占逻辑行，且同一 `<family>` 内按 `(fallbackFor, weight, style)` 分组的字体样式必须唯一。支持三种显式模式：`fallback`（`font_fallback.xml`）、`legacy`（`fonts.xml`，含 `sans-serif` 后紧邻的无名 `Roboto` 家族）与受限 `base`（OxygenOS `/system_ext/etc/fonts_base.xml`，不含无名 `Roboto` 家族且完整保留 `sys-serif` 等非目标家族）。若设备 XML 含未知标签、同逻辑行多 `<family>`、未闭合标签/注释、根闭合后额外内容、目标 CJK `<family>` 含 `lang` 以外的未知属性或缺少 `fallbackFor` 回退项，转换器将显式拒绝并中止安装。
+- **`/system_ext/etc/fonts_base.xml` 别名与分区覆盖边界**：安装器仅放行已知结构的 `/system_ext/etc/fonts_base.xml` 及其与 `/system/system_ext/etc/fonts_base.xml` 经 `readlink -f` 确认指向同一文件的规范化路径别名（仅处理一次并输出至 `module/system/system_ext/etc/fonts_base.xml`）。若两个路径为独立副本、指向未知软链目标、映射关系不一致，或 `/my_product`、`/odm`、`/product`、`/vendor`、`/system_ext/etc/fonts.xml`、`/system_ext/etc/font_fallback.xml` 等存在其他分区字体配置覆盖，安装器仍会显式报错拒绝并清理全部暂存文件。
 - **未标注语言文本 (Unannotated Han Text)**：Android 根据视图/文本的 Locale 顺序路由 CJK 字体；未显式标注语言标签的纯汉字文本会优先跟随系统当前首选语言。
-- **应用自带字体**：硬编码自带字体或绕过系统 `fonts.xml` / `font_fallback.xml` 的应用（如部分游戏或自定义渲染引擎）不受系统字体模块影响。
-- **不支持的分区覆盖**：若 ROM 在 `/my_product`、`/odm`、`/product`、`/system_ext` 或 `/vendor` 下存在额外的 `fonts.xml` / `font_fallback.xml` 覆盖文件，本模块为避免静默错配会显式报错并中止安装。
+- **应用自带字体**：硬编码自带字体或绕过系统 `fonts.xml` / `font_fallback.xml` / `fonts_base.xml` 的应用（如部分游戏或自定义渲染引擎）不受系统字体模块影响。
