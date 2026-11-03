@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    EXCERPT FIXTURE ONLY (NOT COMPLETE DEVICE FILE):
+    Representative excerpt of OnePlus 13 (Android 16 / OxygenOS 16) /system/etc/fonts.xml
+    constructed from user-provided structural specifications for regression testing.
+
+    WARNING: Modification of this file is deprecated in modern Android, where font_fallback.xml
+    is preferred. Example syntax in comments:
+    <family name="deprecated-example">
+        <font weight="400" style="normal">DeprecatedExample.ttf</font>
+    </family>
+-->
+<familyset version="23">
+    <!-- first family is default -->
+    <family name="sans-serif">
+        <font weight="100" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal">SysFont-Regular.ttf
+            <axis tag="ital" stylevalue="0" />
+            <axis tag="wdth" stylevalue="100" />
+            <axis tag="wght" stylevalue="900" />
+        </font>
+    </family>
+
+    <!-- Unnamed Roboto family immediately following sans-serif -->
+    <family>
+        <font supportedAxes="wght,ital">Roboto-Regular.ttf
+            <axis tag="wdth" stylevalue="100" />
+        </font>
+    </family>
+
+    <!--#ifdef OPLUS_FEATURE_FONT_OP_SANS-->
+    <family name="sys-sans-en">
+        <font weight="100" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="1000" style="normal" postScriptName="OPlusSansEn">SysSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="1000" />
+        </font>
+    </family>
+
+    <family name="op-sans-en">
+        <font weight="100" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" postScriptName="OSans">OPSans-En-Regular.ttf
+            <axis tag="wght" stylevalue="900" />
+        </font>
+    </family>
+    <alias name="sans-en-thin" to="sys-sans-en" weight="100" />
+    <alias name="sans-en-light" to="sys-sans-en" weight="300" />
+    <alias name="sans-en-regular" to="sys-sans-en" weight="400" />
+    <alias name="sans-en-medium" to="sys-sans-en" weight="500" />
+    <alias name="sans-en-bold" to="sys-sans-en" weight="700" />
+    <!--#endif OPLUS_FEATURE_FONT_OP_SANS-->
+
+    <alias name="sans-serif-thin" to="sans-serif" weight="100" />
+    <alias name="sans-serif-light" to="sans-serif" weight="300" />
+    <alias name="sans-serif-medium" to="sans-serif" weight="500" />
+    <alias name="sans-serif-black" to="sans-serif" weight="900" />
+
+    <!-- Non-target families that must remain untouched -->
+    <family name="sans-serif-condensed">
+        <font supportedAxes="wght,ital">Roboto-Regular.ttf
+            <axis tag="wdth" stylevalue="75" />
+        </font>
+    </family>
+
+    <family name="roboto-flex">
+        <font supportedAxes="wght,wdth">RobotoFlex-Regular.ttf</font>
+    </family>
+
+    <family name="op-sans-num">
+        <font weight="400" style="normal">OSans-Number.ttf</font>
+    </family>
+
+    <family name="serif">
+        <font weight="400" style="normal">NotoSerif-Regular.ttf</font>
+        <font weight="700" style="normal">NotoSerif-Bold.ttf</font>
+    </family>
+
+    <family name="monospace">
+        <font weight="400" style="normal">DroidSansMono.ttf</font>
+    </family>
+
+    <!-- Commented-out old CJK OTC families MUST remain untouched inside comments:
+    <family lang="zh-Hans">
+        <font weight="400" style="normal" index="2">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="2" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+    <family lang="zh-Hant,zh-Bopo">
+        <font weight="400" style="normal" index="3">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="3" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+    -->
+
+    <!-- Active OPlus zh-Hans family with multi-line tag and 100..1000 weights -->
+    <family
+        lang="zh-Hans">
+        <font weight="100" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="1000" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+            <axis tag="wght" stylevalue="1000" />
+        </font>
+        <font weight="400" style="normal" index="2" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <!-- Active OPlus zh-Hant,zh-Bopo family -->
+    <family lang='zh-Hant,zh-Bopo'>
+        <font weight="100" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="1000" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
+            <axis tag="wght" stylevalue="1000" />
+        </font>
+        <font weight="400" style="normal" index="3" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <!-- Primary ja family -->
+    <family lang="ja">
+        <font weight="100" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" index="0">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="400" style="normal" index="0" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <!-- Second ja family (Hentaigana) - must NOT be modified -->
+    <family lang="ja">
+        <font weight="400" style="normal">NotoSerifHentaigana.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="700" style="normal">NotoSerifHentaigana.ttf
+            <axis tag="wght" stylevalue="700" />
+        </font>
+    </family>
+
+    <!-- ko family -->
+    <family lang="ko">
+        <font weight="100" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal" index="1">NotoSansCJK-Regular.ttc
+            <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="400" style="normal" index="1" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <!-- Emoji families: first has ignore="true" for legacy -->
+    <family lang="und-Zsye" ignore="true">
+        <font weight="400" style="normal">NotoColorEmojiLegacy.ttf</font>
+    </family>
+
+    <family lang="und-Zsye">
+        <font weight="400" style="normal">NotoColorEmoji.ttf</font>
+    </family>
+
+    <family lang="und-Zsye">
+        <font weight="400" style="normal">NotoColorEmojiFlags.ttf</font>
+    </family>
+</familyset>

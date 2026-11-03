@@ -1,0 +1,171 @@
+#!/bin/sh
+# Build script for ksu-noto-fonts-apple-emoji.
+# Fetches pinned upstream fonts and licenses from sources.lock into .cache/downloads,
+# verifies SHA-256 digests, runs tools/check_fonts.py on build/fonts, stages module
+# payload, packages dist/ksu-noto-fonts-apple-emoji-<version>.zip, and writes .sha256.
+
+set -eu
+
+ROOT_DIR=$(CDPATH='' cd -- "${0%/*}/.." && pwd)
+LOCK_FILE="$ROOT_DIR/sources.lock"
+CACHE_DIR="${FONT_CACHE_DIR:-$ROOT_DIR/.cache/downloads}"
+BUILD_DIR="$ROOT_DIR/build"
+FONTS_BUILD_DIR="$BUILD_DIR/fonts"
+STAGE_DIR="$BUILD_DIR/module"
+DIST_DIR="$ROOT_DIR/dist"
+
+fail() {
+  printf 'BUILD ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+[ -f "$LOCK_FILE" ] || fail "sources.lock not found at $LOCK_FILE"
+[ -f "$ROOT_DIR/module/module.prop" ] || fail "module/module.prop not found"
+
+MOD_VERSION=$(sed -n 's/^version=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
+[ -n "$MOD_VERSION" ] || MOD_VERSION="v1.0.0"
+
+mkdir -p "$CACHE_DIR"
+rm -rf "$BUILD_DIR"
+mkdir -p "$FONTS_BUILD_DIR" "$STAGE_DIR" "$DIST_DIR"
+
+verify_sha256() {
+  file_path="$1"
+  expected_hash="$2"
+  actual_hash=$(sha256sum "$file_path" | awk '{print tolower($1)}')
+  expected_lower=$(printf '%s' "$expected_hash" | tr '[:upper:]' '[:lower:]')
+  [ "$actual_hash" = "$expected_lower" ]
+}
+
+download_file() {
+  url="$1"
+  dest="$2"
+  tmp_dest="$dest.part.$$"
+  rm -f "$tmp_dest"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 --connect-timeout 20 "$url" -o "$tmp_dest" || {
+      rm -f "$tmp_dest"
+      return 1
+    }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$tmp_dest" "$url" || {
+      rm -f "$tmp_dest"
+      return 1
+    }
+  else
+    fail "Neither curl nor wget is available for downloading assets"
+  fi
+  mv -f "$tmp_dest" "$dest"
+}
+
+printf '%s\n' "==> Checking and fetching locked upstream assets..."
+while IFS='|' read -r kind dest_name upstream_ref url sha256 || [ -n "${kind:-}" ]; do
+  case "$kind" in
+    ''|\#*) continue ;;
+  esac
+  if [ -z "$dest_name" ] || [ -z "$url" ] || [ -z "$sha256" ]; then
+    fail "Malformed entry in sources.lock: $kind|$dest_name"
+  fi
+
+  cached_file="$CACHE_DIR/$dest_name"
+  if [ -f "$cached_file" ]; then
+    if ! verify_sha256 "$cached_file" "$sha256"; then
+      printf 'Cached file %s failed SHA-256 check, re-downloading...\n' "$dest_name"
+      rm -f "$cached_file"
+    fi
+  fi
+
+  if [ ! -f "$cached_file" ]; then
+    printf 'Downloading %s (%s)...\n' "$dest_name" "$upstream_ref"
+    download_file "$url" "$cached_file" || fail "Failed to download $url"
+  fi
+
+  if ! verify_sha256 "$cached_file" "$sha256"; then
+    rm -f "$cached_file"
+    fail "SHA-256 mismatch for $dest_name after download"
+  fi
+
+  case "$kind" in
+    font)
+      cp -pf "$cached_file" "$FONTS_BUILD_DIR/$dest_name"
+      ;;
+    license)
+      mkdir -p "$ROOT_DIR/licenses"
+      cp -pf "$cached_file" "$ROOT_DIR/licenses/$dest_name"
+      ;;
+    *)
+      fail "Unknown asset kind in sources.lock: $kind"
+      ;;
+  esac
+done < "$LOCK_FILE"
+
+printf '%s\n' "==> Validating fonts with tools/check_fonts.py..."
+python3 -I "$ROOT_DIR/tools/check_fonts.py" "$FONTS_BUILD_DIR" --lock "$LOCK_FILE"
+
+printf '%s\n' "==> Staging KernelSU module directory..."
+mkdir -p \
+  "$STAGE_DIR/system/fonts" \
+  "$STAGE_DIR/tools" \
+  "$STAGE_DIR/licenses"
+
+cp -pf "$ROOT_DIR/module/module.prop" "$STAGE_DIR/module.prop"
+cp -pf "$ROOT_DIR/module/customize.sh" "$STAGE_DIR/customize.sh"
+cp -pf "$ROOT_DIR/module/tools/fontconfig.sh" "$STAGE_DIR/tools/fontconfig.sh"
+cp -pf "$ROOT_DIR/module/tools/fontxml.awk" "$STAGE_DIR/tools/fontxml.awk"
+cp -pf "$ROOT_DIR/NOTICE.md" "$STAGE_DIR/NOTICE.md"
+cp -pf "$ROOT_DIR/licenses/"*.txt "$STAGE_DIR/licenses/"
+cp -pf "$FONTS_BUILD_DIR/"*.ttf "$STAGE_DIR/system/fonts/"
+
+chmod 0755 "$STAGE_DIR/customize.sh" "$STAGE_DIR/tools/fontconfig.sh"
+chmod 0644 "$STAGE_DIR/module.prop" "$STAGE_DIR/NOTICE.md" "$STAGE_DIR/tools/fontxml.awk"
+chmod 0644 "$STAGE_DIR/licenses/"*.txt "$STAGE_DIR/system/fonts/"*.ttf
+
+ZIP_NAME="ksu-noto-fonts-apple-emoji-${MOD_VERSION}.zip"
+ZIP_PATH="$DIST_DIR/$ZIP_NAME"
+TMP_ZIP="$DIST_DIR/.tmp-${ZIP_NAME}"
+rm -f "$TMP_ZIP" "$ZIP_PATH" "$ZIP_PATH.sha256"
+
+printf '%s\n' "==> Packaging deterministic ZIP archive: $ZIP_PATH..."
+python3 -I - "$STAGE_DIR" "$TMP_ZIP" <<'PYEOF'
+import os
+import stat
+import sys
+import zipfile
+
+stage_dir = sys.argv[1]
+out_zip = sys.argv[2]
+FIXED_TIME = (2026, 1, 1, 0, 0, 0)
+
+entries = []
+for root, dirs, files in os.walk(stage_dir):
+    dirs.sort()
+    files.sort()
+    for f in files:
+        full_path = os.path.join(root, f)
+        rel_path = os.path.relpath(full_path, stage_dir).replace(os.sep, "/")
+        entries.append((rel_path, full_path))
+
+entries.sort(key=lambda x: x[0])
+
+with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    for rel_path, full_path in entries:
+        st = os.stat(full_path)
+        mode = stat.S_IMODE(st.st_mode)
+        zi = zipfile.ZipInfo(filename=rel_path, date_time=FIXED_TIME)
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        zi.create_system = 3  # Unix
+        zi.external_attr = (stat.S_IFREG | mode) << 16
+        with open(full_path, "rb") as fh:
+            zf.writestr(zi, fh.read(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=6)
+PYEOF
+
+mv -f "$TMP_ZIP" "$ZIP_PATH"
+(
+  cd "$DIST_DIR"
+  sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+)
+
+printf '%s\n' "==> Verifying packaged ZIP..."
+sh "$ROOT_DIR/scripts/verify_zip.sh" "$ZIP_PATH"
+
+printf 'Build succeeded: %s\n' "$ZIP_PATH"

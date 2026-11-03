@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    EXCERPT FIXTURE ONLY (NOT COMPLETE DEVICE FILE):
+    Representative excerpt of OnePlus 13 (Android 16 / OxygenOS 16) /system/etc/font_fallback.xml
+    constructed from user-provided structural specifications for regression testing.
+-->
+<familyset>
+    <!-- default sans-serif (modern VF with supportedAxes) -->
+    <family name="sans-serif">
+        <font supportedAxes="wght,ital">Roboto-Regular.ttf
+            <axis tag="wdth" stylevalue="100" />
+        </font>
+    </family>
+
+    <family name="sans-serif-condensed">
+        <font supportedAxes="wght,ital">Roboto-Regular.ttf
+            <axis tag="wdth" stylevalue="75" />
+        </font>
+    </family>
+
+    <family name="roboto-flex">
+        <font supportedAxes="wght,wdth,opsz,GRAD,slnt,XTRA,XOPQ,YOPQ,YTLC,YTUC,YTAS,YTDE,YTFI">RobotoFlex-Regular.ttf</font>
+    </family>
+
+    <family name="serif">
+        <font weight="400" style="normal">NotoSerif-Regular.ttf</font>
+        <font weight="700" style="normal">NotoSerif-Bold.ttf</font>
+        <font weight="400" style="italic">NotoSerif-Italic.ttf</font>
+        <font weight="700" style="italic">NotoSerif-BoldItalic.ttf</font>
+    </family>
+
+    <family name="monospace">
+        <font weight="400" style="normal">DroidSansMono.ttf</font>
+    </family>
+
+    <!-- non-CJK language family with fallbackFor="serif" and axis -->
+    <family lang="und-Arab">
+        <font weight="400" style="normal" supportedAxes="wght">NotoNaskhArabic-VF.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="400" style="normal" fallbackFor="serif">NotoNaskhArabic-Regular.ttf</font>
+    </family>
+
+    <!-- CJK locale families -->
+    <family lang="zh-Hans">
+        <font weight="400" style="normal" index="2" supportedAxes="wght" postScriptName="NotoSansCJKJP-Regular">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="2" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <family lang="zh-Hant,zh-Bopo">
+        <font weight="400" style="normal" index="3" supportedAxes="wght" postScriptName="NotoSansCJKJP-Regular">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="3" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <family lang="ja">
+        <font weight="400" style="normal" index="0" supportedAxes="wght" postScriptName="NotoSansCJKJP-Regular">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="0" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <family lang="ja">
+        <font weight="400" style="normal" supportedAxes="wght">NotoSerifHentaigana.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+    </family>
+
+    <family lang="ko">
+        <font weight="400" style="normal" index="1" supportedAxes="wght" postScriptName="NotoSansCJKJP-Regular">NotoSansCJK-Regular.ttc</font>
+        <font weight="400" style="normal" index="1" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
+    </family>
+
+    <!-- Emoji families -->
+    <family lang="und-Zsye">
+        <font weight="400" style="normal">NotoColorEmoji.ttf</font>
+    </family>
+
+    <family lang="und-Zsye">
+        <font weight="400" style="normal">NotoColorEmojiFlags.ttf</font>
+    </family>
+
+    <!-- Tail aliases -->
+    <alias name="arial" to="sans-serif" />
+    <alias name="helvetica" to="sans-serif" />
+    <alias name=" sans-serif-thin" to="sans-serif" weight="100" />
+    <alias name="sans-serif-light" to="sans-serif" weight="300" />
+    <alias name="sans-serif-medium" to="sans-serif" weight="500" />
+    <alias name="sans-serif-black" to="sans-serif" weight="900" />
+    <alias name="monospace-serif" to="monospace" />
+</familyset>

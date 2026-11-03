@@ -1,0 +1,84 @@
+name: Build and Release Module
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create a GitHub Release if triggered on a tag"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Verify KernelSU Font Module ZIP
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck curl coreutils
+          python3 -m pip install --upgrade pip fonttools
+
+      - name: Run regression tests
+        run: sh tests/run.sh
+
+      - name: Cache locked upstream fonts
+        uses: actions/cache@v4
+        with:
+          path: .cache/downloads
+          key: fonts-${{ hashFiles('sources.lock') }}
+
+      - name: Build module ZIP
+        run: sh scripts/build.sh
+
+      - name: Validate built fonts and ZIP package
+        run: |
+          python3 -I tools/check_fonts.py build/fonts
+          sh scripts/verify_zip.sh dist/*.zip
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksu-noto-fonts-apple-emoji-dist
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: ${{ github.event.inputs.publish_release == 'true' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built ZIP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ksu-noto-fonts-apple-emoji-dist
+          path: dist
+
+      - name: Verify downloaded ZIP checksum
+        run: |
+          cd dist
+          sha256sum -c ./*.zip.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
