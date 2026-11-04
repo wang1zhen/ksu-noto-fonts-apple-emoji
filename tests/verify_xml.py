@@ -1,33 +1,32 @@
 #!/usr/bin/env python3
-"""Independent host-side XML output verifier for ksu-noto-fonts-apple-emoji.
+"""Independent host-side XML output verifier for ksu-noto-fonts-apple-emoji (v1.0.2).
 
 Parses original and transformed font XML files using xml.etree.ElementTree and
-verifies structural and semantic invariants:
+independently verifies structural and node-level diff invariants:
 1. Root <familyset> tag and version attribute match mode ('fallback', 'legacy', 'base').
-2. Default sans-serif (in legacy mode: also unnamed Roboto family after sans-serif;
-   in legacy and base modes: also sys-sans-en, op-sans-en; in base mode: no unnamed
-   Roboto family after sans-serif) are replaced with KSU-NotoSans-Regular-VF.ttf and
-   KSU-NotoSans-Italic-VF.ttf, wdth=100, weights 100..900, without Roboto ital
-   axis, postScriptName, or weight 1000.
-3. Non-target named families (sys-serif, sans-serif-condensed, roboto-flex,
-   op-sans-num, osans-solid-digits, serif, monospace, etc.), other language
-   families (e.g. und-Arab), non-western unnamed families, and all <alias> elements
-   are preserved verbatim.
-4. CJK locale families (zh-Hans, zh-Hant,zh-Bopo, first ja, ko) prepend a new
-   dedicated <family lang="..."> containing KSU-NotoSansCJK{sc,tc,jp,kr}-VF.ttf
-   plus verbatim copies of all original fallbackFor="..." <font> elements
-   (including child <axis> tags), while preserving the original CJK <family>
-   blocks completely untouched immediately after.
-5. Within every <family>, font styles are unique per (fallbackFor, weight, style)
-   so Android's FontFamily.Builder never encounters duplicate weight/slant within
-   the same fallback target, without false positives across different fallbackFor
-   targets. Specialized routing (e.g. serif) keeps the original primary font.
-6. The second ja family (NotoSerifHentaigana.ttf) is preserved untouched.
-7. KSU-AppleColorEmoji.ttf is inserted in a new <family lang="und-Zsye"> (without
-   ignore="true") immediately before the first active und-Zsye family, while
-   preserving any prior ignore="true" family (NotoColorEmojiLegacy.ttf) and
-   subsequent active emoji families (NotoColorEmoji.ttf, NotoColorEmojiFlags.ttf).
-8. Commented-out legacy CJK OTC blocks in raw text remain untouched.
+2. Top-level <familyset> child sequence (<family> and <alias>) is preserved in exact
+   order, with zero <alias> changes, zero CJK <family> additions, and only a single
+   prepended <family lang="und-Zsye"> (NotoColorEmoji.ttf with postScriptName="KsuAppleColorEmoji")
+   immediately before the original active NotoColorEmoji.ttf family.
+3. Every non-target <family> and every non-target <font> node (sys-serif, roboto-flex,
+   serif, monospace, NotoSerifCJK-Regular.ttc, NotoSerifHentaigana.ttf, und-Arab, etc.)
+   is preserved 100% verbatim.
+4. Target <font> nodes match the exact approved node-level transformation:
+   - Roboto-Regular.ttf: supportedAxes="wght,ital" -> "wght" + adjacent NotoSans-Italic.ttf
+     preserving wdth (75 / 75.0 / 100 / 100.0).
+   - SysFont-Regular.ttf (legacy sans-serif 100..900): strips ital=0 axis + adjacent
+     NotoSans-Italic.ttf (wdth=100, wght=W).
+   - SysSans-En-Regular.ttf / OPSans-En-Regular.ttf: strips OEM postScriptName, clamps
+     wght 1000->900 + adjacent NotoSans-Italic.ttf.
+   - SysSans-Hans-Regular.ttf / SysSans-Hant-Regular.ttf:
+     * fallbackFor="serif": rewrites filename ONLY to KsuReserved-SysSans-Hans/Hant-Regular.ttf,
+       keeping weight, style, fallbackFor="serif", postScriptName="OPPO_Sans_4.0_SC|TC", and 0 axes.
+     * normal: strips OEM postScriptName, clamps wght 1000->900, pins wght=min(W,900).
+   - NotoSansCJK-Regular.ttc: preserves index in 0..3 matching locale (0=ja, 1=ko, 2=zh-Hans,
+     3=zh-Hant,zh-Bopo), strips OEM postScriptName, pins wght=min(W,900) when supportedAxes is absent.
+   - NotoColorEmoji.ttf: active family rewritten to KsuReserved-NotoColorEmoji.ttf with
+     postScriptName="NotoColorEmoji" after the prepended KsuAppleColorEmoji family.
+5. Within every <family>, font styles are unique per (fallbackFor, weight, style).
 """
 
 import argparse
@@ -36,36 +35,55 @@ import sys
 import xml.etree.ElementTree as ET
 
 
+NOTO_REPLACED_FILES = {
+    "Roboto-Regular.ttf",
+    "SysFont-Regular.ttf",
+    "SysSans-En-Regular.ttf",
+    "OPSans-En-Regular.ttf",
+    "NotoSans-Italic.ttf",
+    "SysSans-Hans-Regular.ttf",
+    "SysSans-Hant-Regular.ttf",
+    "NotoSansCJK-Regular.ttc",
+}
+
+EXPECTED_TTC_INDEX = {
+    "ja": "0",
+    "ko": "1",
+    "zh-Hans": "2",
+    "zh-Hant,zh-Bopo": "3",
+    "zh-Bopo,zh-Hant": "3",
+}
+
+
 def normalize_elem(elem: ET.Element) -> tuple:
     children = tuple(normalize_elem(c) for c in list(elem))
     text = (elem.text or "").strip()
     return (elem.tag, tuple(sorted(elem.attrib.items())), text, children)
 
 
+def make_font_norm(attrib: dict[str, str], filename: str, axes: list[tuple[str, str]]) -> tuple:
+    axis_children = tuple(
+        ("axis", tuple(sorted({"tag": tag, "stylevalue": val}.items())), "", ())
+        for tag, val in axes
+    )
+    return ("font", tuple(sorted(attrib.items())), filename, axis_children)
+
+
 def font_filename(font_elem: ET.Element) -> str:
     return (font_elem.text or "").strip()
 
 
-def font_axes(font_elem: ET.Element) -> dict:
-    axes = {}
+def font_axes_list(font_elem: ET.Element) -> list[tuple[str, str]]:
+    axes = []
     for child in font_elem:
-        if child.tag == "axis":
-            axes[child.attrib.get("tag", "")] = child.attrib.get("stylevalue", "")
+        if child.tag != "axis":
+            raise AssertionError(f"Unexpected child <{child.tag}> inside <font>")
+        axes.append((child.attrib.get("tag", ""), child.attrib.get("stylevalue", "")))
     return axes
 
 
 def assert_family_style_uniqueness(fam: ET.Element, label: str) -> None:
-    """Verify (weight, style) validity and uniqueness within each fallbackFor group of a <family>.
-
-    Android parses weight with Integer.parseInt(weightStr) (default 400) and checks
-    "italic".equals(styleStr) (treating any non-"italic" string as upright/normal),
-    then partitions a <family>'s <font> children by fallbackFor (default "" vs
-    named target like "serif") and builds a separate FontFamily.Builder for each
-    partition. Duplicate effective (weight_int, is_italic) within the same fallbackFor
-    partition throws in FontFamily.Builder. We enforce both strict canonical scalar
-    syntax (weight in [1, 1000] without leading zeros, style in {"normal", "italic"})
-    and uniqueness under Android's effective (weight_int, is_italic) semantics.
-    """
+    """Verify (weight, style) validity and uniqueness within each fallbackFor group of a <family>."""
     seen_by_target: dict[str, set[tuple[int, bool]]] = {}
     for idx, child in enumerate(fam):
         if child.tag != "font":
@@ -92,69 +110,155 @@ def assert_family_style_uniqueness(fam: ET.Element, label: str) -> None:
             raise AssertionError(f"{label}: unsupported font style={style_raw!r} at font[{idx}]")
 
 
-def resolve_effective_route_fonts(families: list[ET.Element], target_chain: str) -> list[ET.Element]:
-    """Simulate Android SystemFonts pushFamilyToFallback routing for a locale's families.
+def is_active_main_emoji_family(fam: ET.Element) -> bool:
+    if fam.attrib.get("lang", "").lower() != "und-zsye":
+        return False
+    if fam.attrib.get("ignore", "").lower() == "true":
+        return False
+    fonts = [c for c in fam if c.tag == "font"]
+    return len(fonts) == 1 and font_filename(fonts[0]) == "NotoColorEmoji.ttf"
 
-    For a given named fallback chain (e.g. 'serif') or default chain (''):
-    - If target_chain == '': collects normal fonts (fallbackFor is None) from each family.
-    - If target_chain != '': for each family, if the family contains any <font fallbackFor=target_chain>,
-      those specific fonts are routed to target_chain; otherwise (if the family has no
-      fallbackFor=target_chain entries), its normal fonts are routed to target_chain!
-    """
-    routed: list[ET.Element] = []
-    for fam in families:
-        if fam.attrib.get("ignore", "").lower() == "true":
+
+def build_expected_family_fonts(orig_fam: ET.Element, mode: str, stats: dict[str, int]) -> list[tuple]:
+    fam_lang = orig_fam.attrib.get("lang", "")
+    fam_ignore = orig_fam.attrib.get("ignore", "").lower() == "true"
+    expected: list[tuple] = []
+
+    for f in orig_fam:
+        if f.tag != "font":
+            raise AssertionError(f"Unexpected non-font child <{f.tag}> in original family")
+        fn = font_filename(f)
+        attrib = dict(f.attrib)
+        axes = font_axes_list(f)
+
+        if fn == "Roboto-Regular.ttf":
+            if attrib != {"supportedAxes": "wght,ital"} or len(axes) != 1 or axes[0][0] != "wdth":
+                raise AssertionError(f"Unexpected original Roboto-Regular.ttf node: attrib={attrib}, axes={axes}")
+            wdth_val = axes[0][1]
+            if float(wdth_val) not in (75.0, 100.0):
+                raise AssertionError(f"Unexpected wdth={wdth_val} on Roboto-Regular.ttf")
+            expected.append(make_font_norm({"supportedAxes": "wght"}, "Roboto-Regular.ttf", [("wdth", wdth_val)]))
+            expected.append(
+                make_font_norm(
+                    {"style": "italic", "supportedAxes": "wght"},
+                    "NotoSans-Italic.ttf",
+                    [("wdth", wdth_val)],
+                )
+            )
+            stats["roboto"] += 1
             continue
-        fonts = [c for c in fam if c.tag == "font"]
-        normal_fonts = [c for c in fonts if "fallbackFor" not in c.attrib]
-        if target_chain == "":
-            routed.extend(normal_fonts)
-        else:
-            specific_fonts = [c for c in fonts if c.attrib.get("fallbackFor") == target_chain]
-            if specific_fonts:
-                routed.extend(specific_fonts)
+
+        if fn == "SysFont-Regular.ttf":
+            w = attrib.get("weight", "")
+            axes_dict = dict(axes)
+            if (
+                mode != "legacy"
+                or attrib != {"weight": w, "style": "normal"}
+                or axes_dict != {"ital": "0", "wdth": "100", "wght": w}
+            ):
+                raise AssertionError(f"Unexpected SysFont-Regular.ttf node: attrib={attrib}, axes={axes}")
+            expected.append(
+                make_font_norm(
+                    {"weight": w, "style": "normal"},
+                    "SysFont-Regular.ttf",
+                    [("wdth", "100"), ("wght", w)],
+                )
+            )
+            expected.append(
+                make_font_norm(
+                    {"weight": w, "style": "italic"},
+                    "NotoSans-Italic.ttf",
+                    [("wdth", "100"), ("wght", w)],
+                )
+            )
+            stats["sysfont"] += 1
+            continue
+
+        if fn in ("SysSans-En-Regular.ttf", "OPSans-En-Regular.ttf"):
+            w = attrib.get("weight", "")
+            clamped_w = "900" if int(w) > 900 else w
+            if int(w) > 900:
+                stats["clamp"] += 1
+            expected.append(
+                make_font_norm(
+                    {"weight": w, "style": "normal"},
+                    fn,
+                    [("wght", clamped_w)],
+                )
+            )
+            expected.append(
+                make_font_norm(
+                    {"weight": w, "style": "italic"},
+                    "NotoSans-Italic.ttf",
+                    [("wght", clamped_w)],
+                )
+            )
+            stats["oplus_latin"] += 1
+            continue
+
+        if fn in ("SysSans-Hans-Regular.ttf", "SysSans-Hant-Regular.ttf"):
+            if attrib.get("fallbackFor") == "serif":
+                reserved_fn = f"KsuReserved-{fn}"
+                if axes != [] or "postScriptName" not in attrib:
+                    raise AssertionError(f"Unexpected serif SysSans node: attrib={attrib}, axes={axes}")
+                expected.append(make_font_norm(attrib, reserved_fn, []))
+                stats["serif_reserved"] += 1
             else:
-                routed.extend(normal_fonts)
-    return routed
+                w = attrib.get("weight", "")
+                clamped_w = "900" if int(w) > 900 else w
+                if int(w) > 900:
+                    stats["clamp"] += 1
+                expected.append(
+                    make_font_norm(
+                        {"weight": w, "style": "normal"},
+                        fn,
+                        [("wght", clamped_w)],
+                    )
+                )
+                stats["syssans_cjk"] += 1
+            continue
 
+        if fn == "NotoSansCJK-Regular.ttc":
+            idx = attrib.get("index", "")
+            exp_idx = EXPECTED_TTC_INDEX.get(fam_lang)
+            if exp_idx is None or idx != exp_idx:
+                raise AssertionError(f"TTC index {idx!r} does not match locale {fam_lang!r} (expected {exp_idx!r})")
+            w = attrib.get("weight", "400")
+            clamped_w = "900" if int(w) > 900 else w
+            if attrib.get("supportedAxes") == "wght":
+                expected.append(
+                    make_font_norm(
+                        {"weight": w, "style": "normal", "index": idx, "supportedAxes": "wght"},
+                        "NotoSansCJK-Regular.ttc",
+                        [],
+                    )
+                )
+            else:
+                expected.append(
+                    make_font_norm(
+                        {"weight": w, "style": "normal", "index": idx},
+                        "NotoSansCJK-Regular.ttc",
+                        [("wght", clamped_w)],
+                    )
+                )
+            stats["ttc"] += 1
+            continue
 
-def assert_modern_western_family(fam: ET.Element, label: str) -> None:
-    fonts = [c for c in fam if c.tag == "font"]
-    if len(fonts) != 2:
-        raise AssertionError(f"{label}: expected 2 <font> entries, got {len(fonts)}")
+        if fn == "NotoColorEmoji.ttf" and not fam_ignore:
+            expected.append(
+                make_font_norm(
+                    {"weight": "400", "style": "normal", "postScriptName": "NotoColorEmoji"},
+                    "KsuReserved-NotoColorEmoji.ttf",
+                    [],
+                )
+            )
+            stats["emoji"] += 1
+            continue
 
-    reg, ita = fonts[0], fonts[1]
-    if font_filename(reg) != "KSU-NotoSans-Regular-VF.ttf":
-        raise AssertionError(f"{label}: first font must be KSU-NotoSans-Regular-VF.ttf, got {font_filename(reg)}")
-    if reg.attrib != {"supportedAxes": "wght"}:
-        raise AssertionError(f"{label}: unexpected attributes on regular font: {reg.attrib}")
-    if font_axes(reg) != {"wdth": "100"}:
-        raise AssertionError(f"{label}: regular font axes must be wdth=100, got {font_axes(reg)}")
+        # Non-target font node: must remain 100% verbatim
+        expected.append(normalize_elem(f))
 
-    if font_filename(ita) != "KSU-NotoSans-Italic-VF.ttf":
-        raise AssertionError(f"{label}: second font must be KSU-NotoSans-Italic-VF.ttf, got {font_filename(ita)}")
-    if ita.attrib != {"style": "italic", "supportedAxes": "wght"}:
-        raise AssertionError(f"{label}: unexpected attributes on italic font: {ita.attrib}")
-    if font_axes(ita) != {"wdth": "100"}:
-        raise AssertionError(f"{label}: italic font axes must be wdth=100, got {font_axes(ita)}")
-
-
-def assert_legacy_western_family(fam: ET.Element, label: str) -> None:
-    fonts = [c for c in fam if c.tag == "font"]
-    if len(fonts) != 18:
-        raise AssertionError(f"{label}: expected 18 <font> entries (100..900 normal+italic), got {len(fonts)}")
-
-    idx = 0
-    for w in range(100, 1000, 100):
-        for st, expected_file in [("normal", "KSU-NotoSans-Regular-VF.ttf"), ("italic", "KSU-NotoSans-Italic-VF.ttf")]:
-            f = fonts[idx]
-            idx += 1
-            if font_filename(f) != expected_file:
-                raise AssertionError(f"{label}[{idx}]: expected {expected_file}, got {font_filename(f)}")
-            if f.attrib != {"weight": str(w), "style": st}:
-                raise AssertionError(f"{label}[{idx}]: unexpected font attrib {f.attrib}")
-            if font_axes(f) != {"wdth": "100", "wght": str(w)}:
-                raise AssertionError(f"{label}[{idx}]: unexpected axes {font_axes(f)}")
+    return expected
 
 
 def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
@@ -184,305 +288,178 @@ def verify_pair(orig_path: str, out_path: str, mode: str) -> None:
     if mode in ("legacy", "base") and "version" not in out_root.attrib:
         raise AssertionError(f"{out_path}: {mode} familyset must have version attribute")
 
-    for child in out_root:
+    orig_children = list(orig_root)
+    out_children = list(out_root)
+
+    for child in out_children:
         if child.tag not in ("family", "alias"):
             raise AssertionError(f"{out_path}: unexpected child tag <{child.tag}> under <familyset>")
 
-    # Verify all <alias> elements are identical
-    orig_aliases = [normalize_elem(e) for e in orig_root if e.tag == "alias"]
-    out_aliases = [normalize_elem(e) for e in out_root if e.tag == "alias"]
-    if orig_aliases != out_aliases:
-        raise AssertionError(f"{out_path}: <alias> elements were modified")
+    # Locate the unique active NotoColorEmoji.ttf family in orig_children
+    emoji_indices = [
+        i for i, c in enumerate(orig_children) if c.tag == "family" and is_active_main_emoji_family(c)
+    ]
+    if len(emoji_indices) != 1:
+        raise AssertionError(f"{orig_path}: expected 1 active NotoColorEmoji.ttf family, found {len(emoji_indices)}")
+    emoji_pos = emoji_indices[0]
 
-    orig_families = [e for e in orig_root if e.tag == "family"]
-    out_families = [e for e in out_root if e.tag == "family"]
-    if len(out_families) != len(orig_families) + 5:
+    if len(out_children) != len(orig_children) + 1:
         raise AssertionError(
-            f"{out_path}: expected +5 <family> (4 CJK + 1 Apple Emoji), got {len(orig_families)} -> {len(out_families)}"
+            f"{out_path}: expected exactly +1 top-level child (prepended Apple Emoji family), "
+            f"got {len(orig_children)} -> {len(out_children)}"
         )
 
-    # Verify per-(fallbackFor, weight, style) uniqueness on every <family> in output
+    # Check the prepended Apple Emoji family at emoji_pos in out_children
+    apple_fam = out_children[emoji_pos]
+    expected_apple_fam = (
+        "family",
+        (("lang", "und-Zsye"),),
+        "",
+        (
+            make_font_norm(
+                {"weight": "400", "style": "normal", "postScriptName": "KsuAppleColorEmoji"},
+                "NotoColorEmoji.ttf",
+                [],
+            ),
+        ),
+    )
+    if normalize_elem(apple_fam) != expected_apple_fam:
+        raise AssertionError(
+            f"{out_path}: prepended Apple Emoji family at index {emoji_pos} mismatch: {normalize_elem(apple_fam)}"
+        )
+
+    # Align all remaining top-level children 1-to-1 with orig_children
+    aligned_out = out_children[:emoji_pos] + out_children[emoji_pos + 1 :]
+    stats = {
+        "roboto": 0,
+        "sysfont": 0,
+        "oplus_latin": 0,
+        "syssans_cjk": 0,
+        "serif_reserved": 0,
+        "ttc": 0,
+        "emoji": 0,
+        "clamp": 0,
+    }
+
+    for idx, (orig_c, out_c) in enumerate(zip(orig_children, aligned_out)):
+        if orig_c.tag != out_c.tag:
+            raise AssertionError(f"{out_path}: top-level child[{idx}] tag changed {orig_c.tag} -> {out_c.tag}")
+        if orig_c.tag == "alias":
+            if normalize_elem(orig_c) != normalize_elem(out_c):
+                raise AssertionError(f"{out_path}: <alias> at child[{idx}] was modified")
+            continue
+
+        # <family> element: attributes must be 100% preserved
+        if orig_c.attrib != out_c.attrib:
+            raise AssertionError(
+                f"{out_path}: <family> attributes at child[{idx}] changed {orig_c.attrib} -> {out_c.attrib}"
+            )
+
+        exp_fonts = build_expected_family_fonts(orig_c, mode, stats)
+        act_fonts = [normalize_elem(f) for f in out_c]
+        if act_fonts != exp_fonts:
+            fam_desc = orig_c.attrib.get("name") or orig_c.attrib.get("lang") or f"unnamed#{idx}"
+            raise AssertionError(
+                f"{out_path}: <family> ({fam_desc}) at child[{idx}] font diff mismatch:\n"
+                f"  expected: {exp_fonts}\n"
+                f"  actual:   {act_fonts}"
+            )
+
+    # Verify global invariants across all output families and fonts
+    out_families = [c for c in out_children if c.tag == "family"]
     for fam_idx, fam in enumerate(out_families):
         fam_desc = fam.attrib.get("name") or fam.attrib.get("lang") or f"unnamed#{fam_idx}"
         assert_family_style_uniqueness(fam, f"{out_path}:family[{fam_idx}]({fam_desc})")
-
-    # Check Western families
-    sans_fams = [f for f in out_families if f.attrib.get("name") == "sans-serif"]
-    if len(sans_fams) != 1:
-        raise AssertionError(f"{out_path}: expected 1 sans-serif family, got {len(sans_fams)}")
-    if mode == "fallback":
-        assert_modern_western_family(sans_fams[0], "fallback:sans-serif")
-    else:
-        assert_legacy_western_family(sans_fams[0], f"{mode}:sans-serif")
-        sans_idx = out_families.index(sans_fams[0])
-        if mode == "legacy":
-            unnamed_fam = out_families[sans_idx + 1]
-            if unnamed_fam.attrib != {}:
-                raise AssertionError(f"{out_path}: expected unnamed family after sans-serif")
-            assert_modern_western_family(unnamed_fam, "legacy:unnamed-after-sans-serif")
-        else:
-            next_fam = out_families[sans_idx + 1]
-            if next_fam.attrib == {}:
-                raise AssertionError(f"{out_path}: unexpected unnamed family after sans-serif in base mode")
-
-        for oplus_name in ("sys-sans-en", "op-sans-en"):
-            matches = [f for f in out_families if f.attrib.get("name") == oplus_name]
-            if len(matches) != 1:
-                raise AssertionError(f"{out_path}: expected 1 {oplus_name} family, got {len(matches)}")
-            assert_legacy_western_family(matches[0], f"{mode}:{oplus_name}")
-
-    # Check all non-target named families are completely untouched
-    target_names = {"sans-serif"} if mode == "fallback" else {"sans-serif", "sys-sans-en", "op-sans-en"}
-    for untouched_name in (
-        "sans-serif-condensed",
-        "sys-serif",
-        "roboto-flex",
-        "op-sans-num",
-        "osans-solid-digits",
-        "serif",
-        "monospace",
-    ):
-        orig_u = [normalize_elem(f) for f in orig_families if f.attrib.get("name") == untouched_name]
-        out_u = [normalize_elem(f) for f in out_families if f.attrib.get("name") == untouched_name]
-        if orig_u != out_u:
-            raise AssertionError(f"{out_path}: non-target family '{untouched_name}' was modified")
-
-    orig_non_target_named = [
-        normalize_elem(f)
-        for f in orig_families
-        if "name" in f.attrib and f.attrib.get("name", "").lower() not in target_names
-    ]
-    out_non_target_named = [
-        normalize_elem(f)
-        for f in out_families
-        if "name" in f.attrib and f.attrib.get("name", "").lower() not in target_names
-    ]
-    if orig_non_target_named != out_non_target_named:
-        raise AssertionError(f"{out_path}: one or more non-target named families were modified")
-
-    # Check all non-CJK, non-Emoji language families (including und-Arab) untouched
-    cjk_langs = {"zh-Hans", "zh-Hant,zh-Bopo", "zh-Bopo,zh-Hant", "ja", "ko"}
-    orig_arab = [normalize_elem(f) for f in orig_families if f.attrib.get("lang") == "und-Arab"]
-    out_arab = [normalize_elem(f) for f in out_families if f.attrib.get("lang") == "und-Arab"]
-    if orig_arab != out_arab:
-        raise AssertionError(f"{out_path}: non-CJK language family 'und-Arab' was modified")
-
-    orig_other_lang = [
-        normalize_elem(f)
-        for f in orig_families
-        if "lang" in f.attrib and f.attrib["lang"] not in cjk_langs and f.attrib["lang"].lower() != "und-zsye"
-    ]
-    out_other_lang = [
-        normalize_elem(f)
-        for f in out_families
-        if "lang" in f.attrib and f.attrib["lang"] not in cjk_langs and f.attrib["lang"].lower() != "und-zsye"
-    ]
-    if orig_other_lang != out_other_lang:
-        raise AssertionError(f"{out_path}: non-CJK/non-Emoji language families were modified")
-
-    # Check unnamed non-target families are preserved verbatim
-    orig_sans_idx = next(i for i, f in enumerate(orig_families) if f.attrib.get("name") == "sans-serif")
-    out_sans_idx = next(i for i, f in enumerate(out_families) if f.attrib.get("name") == "sans-serif")
-    orig_unnamed_non_target = [
-        normalize_elem(f)
-        for i, f in enumerate(orig_families)
-        if f.attrib == {} and not (mode == "legacy" and i == orig_sans_idx + 1)
-    ]
-    out_unnamed_non_target = [
-        normalize_elem(f)
-        for i, f in enumerate(out_families)
-        if f.attrib == {} and not (mode == "legacy" and i == out_sans_idx + 1)
-    ]
-    if orig_unnamed_non_target != out_unnamed_non_target:
-        raise AssertionError(f"{out_path}: unnamed non-target families were modified")
-
-    # Check CJK locale families
-    cjk_map = {
-        "zh-Hans": "KSU-NotoSansCJKsc-VF.ttf",
-        "zh-Hant,zh-Bopo": "KSU-NotoSansCJKtc-VF.ttf",
-        "ja": "KSU-NotoSansCJKjp-VF.ttf",
-        "ko": "KSU-NotoSansCJKkr-VF.ttf",
-    }
-    for lang_key, expected_cjk_file in cjk_map.items():
-        orig_cjk_list = [f for f in orig_families if f.attrib.get("lang") == lang_key]
-        out_cjk_list = [f for f in out_families if f.attrib.get("lang") == lang_key]
-        if len(orig_cjk_list) == 0 or len(out_cjk_list) != len(orig_cjk_list) + 1:
-            raise AssertionError(
-                f"{out_path}: expected +1 family for lang={lang_key}, got {len(orig_cjk_list)} -> {len(out_cjk_list)}"
-            )
-
-        orig_primary = orig_cjk_list[0]
-        prepended_fam = out_cjk_list[0]
-        preserved_primary = out_cjk_list[1]
-
-        if prepended_fam.attrib != {"lang": lang_key}:
-            raise AssertionError(
-                f"{out_path}: prepended {lang_key} family attrib {prepended_fam.attrib} != {{'lang': {lang_key!r}}}"
-            )
-
-        # Verify original primary CJK family is preserved 100% verbatim right after prepended family
-        if normalize_elem(preserved_primary) != normalize_elem(orig_primary):
-            raise AssertionError(f"{out_path}: original CJK family for {lang_key} was not preserved verbatim")
-        if out_families.index(preserved_primary) != out_families.index(prepended_fam) + 1:
-            raise AssertionError(f"{out_path}: preserved {lang_key} family must immediately follow prepended family")
-
-        # Verify prepended family contents: new KSU Noto CJK normal font(s) + verbatim fallbackFor fonts
-        prep_fonts = [c for c in prepended_fam if c.tag == "font"]
-        orig_fb_fonts = [normalize_elem(c) for c in orig_primary if c.tag == "font" and "fallbackFor" in c.attrib]
-        if not orig_fb_fonts:
-            raise AssertionError(f"{out_path}: original {lang_key} family had no fallbackFor fonts")
-
-        if mode == "fallback":
-            expected_normal_count = 1
-            if len(prep_fonts) != expected_normal_count + len(orig_fb_fonts):
-                raise AssertionError(f"{out_path}: unexpected font count in prepended fallback {lang_key} family")
-            first_f = prep_fonts[0]
-            if font_filename(first_f) != expected_cjk_file:
-                raise AssertionError(f"{out_path}: {lang_key} first font != {expected_cjk_file}")
-            if first_f.attrib != {"weight": "400", "style": "normal", "supportedAxes": "wght"}:
-                raise AssertionError(f"{out_path}: {lang_key} unexpected attrib {first_f.attrib}")
-            if font_axes(first_f) != {}:
-                raise AssertionError(f"{out_path}: {lang_key} fallback VF should not have child axes")
-        else:
-            expected_normal_count = 9
-            if len(prep_fonts) != expected_normal_count + len(orig_fb_fonts):
-                raise AssertionError(f"{out_path}: unexpected font count in prepended {mode} {lang_key} family")
-            for i, w in enumerate(range(100, 1000, 100)):
-                f = prep_fonts[i]
-                if font_filename(f) != expected_cjk_file:
-                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] != {expected_cjk_file}")
-                if f.attrib != {"weight": str(w), "style": "normal"}:
-                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] unexpected attrib {f.attrib}")
-                if font_axes(f) != {"wght": str(w)}:
-                    raise AssertionError(f"{out_path}: {mode} {lang_key}[{i}] unexpected axes {font_axes(f)}")
-
-        prep_fb_fonts = [normalize_elem(c) for c in prep_fonts[expected_normal_count:]]
-        if prep_fb_fonts != orig_fb_fonts:
-            raise AssertionError(
-                f"{out_path}: {lang_key} prepended family did not preserve fallbackFor fonts (including axes) verbatim"
-            )
-
-        # Verify routing invariants:
-        # 1) Default/sans chain ('') for this locale resolves KSU-NotoSansCJK*-VF.ttf first, followed by original fonts
-        default_route = resolve_effective_route_fonts(out_cjk_list, "")
-        if not default_route or font_filename(default_route[0]) != expected_cjk_file:
-            raise AssertionError(f"{out_path}: {lang_key} default route does not prioritize {expected_cjk_file}")
-
-        # 2) Every specialized fallbackFor chain (e.g. 'serif') keeps the exact same first-choice font as original
-        fb_targets = sorted({c.attrib["fallbackFor"] for c in orig_primary if c.tag == "font" and "fallbackFor" in c.attrib})
-        for target_chain in fb_targets:
-            orig_route = resolve_effective_route_fonts(orig_cjk_list, target_chain)
-            out_route = resolve_effective_route_fonts(out_cjk_list, target_chain)
-            if not orig_route or not out_route:
-                raise AssertionError(f"{out_path}: empty route for {lang_key} fallbackFor={target_chain}")
-            if normalize_elem(out_route[0]) != normalize_elem(orig_route[0]):
-                raise AssertionError(
-                    f"{out_path}: {lang_key} specialized route '{target_chain}' first choice changed: "
-                    f"{font_filename(orig_route[0])} -> {font_filename(out_route[0])}"
-                )
-
-        # If ja has a second original family (Hentaigana), verify it is untouched at index 2
-        if lang_key == "ja":
-            if len(out_cjk_list) != 3:
-                raise AssertionError(
-                    f"{out_path}: expected 3 ja families (prepended + primary + Hentaigana), got {len(out_cjk_list)}"
-                )
-            if normalize_elem(orig_cjk_list[1]) != normalize_elem(out_cjk_list[2]):
-                raise AssertionError(f"{out_path}: second original ja family (Hentaigana) was modified")
-
-    # Check Emoji families
-    orig_emoji = [f for f in orig_families if f.attrib.get("lang", "").lower() == "und-zsye"]
-    out_emoji = [f for f in out_families if f.attrib.get("lang", "").lower() == "und-zsye"]
-    if len(out_emoji) != len(orig_emoji) + 1:
-        raise AssertionError(f"{out_path}: expected +1 und-Zsye family, got {len(orig_emoji)} -> {len(out_emoji)}")
+        for f in fam:
+            fn = font_filename(f)
+            if fn.startswith("KSU-"):
+                raise AssertionError(f"{out_path}: forbidden legacy KSU-* font reference: {fn}")
+            if fn in NOTO_REPLACED_FILES:
+                if "postScriptName" in f.attrib:
+                    raise AssertionError(f"{out_path}: Noto font {fn} must not retain postScriptName={f.attrib['postScriptName']!r}")
+                if "ital" in f.attrib.get("supportedAxes", "").split(","):
+                    raise AssertionError(f"{out_path}: Noto font {fn} must not retain ital in supportedAxes")
+                for ax_tag, ax_val in font_axes_list(f):
+                    if ax_tag == "ital":
+                        raise AssertionError(f"{out_path}: Noto font {fn} must not have <axis tag='ital'>")
+                    if ax_tag == "wght" and float(ax_val) > 900.0:
+                        raise AssertionError(f"{out_path}: Noto font {fn} has unclamped wght={ax_val}")
 
     if mode == "fallback":
-        if [font_filename(f.find("font")) for f in out_emoji] != [
-            "KSU-AppleColorEmoji.ttf",
-            "NotoColorEmoji.ttf",
-            "NotoColorEmojiFlags.ttf",
-        ]:
-            raise AssertionError(f"{out_path}: unexpected emoji order in fallback mode")
-        if "ignore" in out_emoji[0].attrib:
-            raise AssertionError(f"{out_path}: KSU-AppleColorEmoji family must not have ignore attribute")
-    else:
-        if [font_filename(f.find("font")) for f in out_emoji] != [
-            "NotoColorEmojiLegacy.ttf",
-            "KSU-AppleColorEmoji.ttf",
-            "NotoColorEmoji.ttf",
-            "NotoColorEmojiFlags.ttf",
-        ]:
-            raise AssertionError(f"{out_path}: unexpected emoji order in {mode} mode")
-        if out_emoji[0].attrib.get("ignore") != "true":
-            raise AssertionError(f"{out_path}: first {mode} emoji family must retain ignore='true'")
-        if "ignore" in out_emoji[1].attrib:
-            raise AssertionError(f"{out_path}: KSU-AppleColorEmoji family must not inherit ignore='true'")
+        if stats["roboto"] < 2 or stats["ttc"] != 4 or stats["emoji"] != 1 or stats["serif_reserved"] != 0:
+            raise AssertionError(f"{out_path}: unexpected fallback stats: {stats}")
+    elif mode == "legacy":
+        if (
+            stats["sysfont"] != 9
+            or stats["roboto"] < 2
+            or stats["oplus_latin"] != 19
+            or stats["syssans_cjk"] != 20
+            or stats["serif_reserved"] != 2
+            or stats["ttc"] != 18
+            or stats["emoji"] != 1
+            or stats["clamp"] != 3
+        ):
+            raise AssertionError(f"{out_path}: unexpected legacy stats: {stats}")
+    elif mode == "base":
+        if (
+            stats["sysfont"] != 0
+            or stats["roboto"] < 2
+            or stats["oplus_latin"] != 19
+            or stats["syssans_cjk"] != 20
+            or stats["serif_reserved"] != 2
+            or stats["ttc"] != 18
+            or stats["emoji"] != 1
+            or stats["clamp"] != 3
+        ):
+            raise AssertionError(f"{out_path}: unexpected base stats: {stats}")
 
 
 def self_test_style_uniqueness_helper() -> None:
-    """Unit test for assert_family_style_uniqueness:
-    - Same (weight, style) across different fallbackFor values must pass (no false positive).
-    - Same (weight, style) within the same fallbackFor value must raise AssertionError.
-    """
+    """Unit test for assert_family_style_uniqueness."""
     ok_fam = ET.fromstring(
         '<family lang="zh-Hans">'
-        '<font weight="400" style="normal">KSU-NotoSansCJKsc-VF.ttf</font>'
-        '<font weight="400" style="normal" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>'
+        '<font weight="400" style="normal">SysSans-Hans-Regular.ttf</font>'
+        '<font weight="400" style="normal" fallbackFor="serif">KsuReserved-SysSans-Hans-Regular.ttf</font>'
         "</family>"
     )
     assert_family_style_uniqueness(ok_fam, "self_test:different_fallbackFor")
 
-    dup_normal_fam = ET.fromstring(
-        '<family lang="zh-Hans">'
-        '<font weight="400" style="normal">KSU-NotoSansCJKsc-VF.ttf</font>'
-        '<font weight="400" style="normal">NotoSansCJK-Regular.ttc</font>'
-        "</family>"
-    )
-    try:
-        assert_family_style_uniqueness(dup_normal_fam, "self_test:dup_normal")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("self_test failed: duplicate normal (400, normal) was not rejected")
-
-    dup_serif_fam = ET.fromstring(
-        '<family lang="zh-Hans">'
-        '<font weight="400" style="normal" fallbackFor="serif">A.ttc</font>'
-        '<font weight="400" style="normal" fallbackFor="serif">B.ttc</font>'
-        "</family>"
-    )
-    try:
-        assert_family_style_uniqueness(dup_serif_fam, "self_test:dup_serif")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("self_test failed: duplicate serif (400, normal) was not rejected")
-
-    dup_leading_zero_fam = ET.fromstring(
-        '<family name="monospace">'
-        '<font weight="400" style="normal">DroidSansMono.ttf</font>'
-        '<font weight="0400" style="normal">DupZero.ttf</font>'
-        "</family>"
-    )
-    try:
-        assert_family_style_uniqueness(dup_leading_zero_fam, "self_test:dup_leading_zero_weight")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("self_test failed: weight=0400 colliding with weight=400 was not rejected")
-
-    dup_bogus_style_fam = ET.fromstring(
-        '<family name="monospace">'
-        '<font weight="400" style="normal">DroidSansMono.ttf</font>'
-        '<font weight="400" style="bogus">DupBogus.ttf</font>'
-        "</family>"
-    )
-    try:
-        assert_family_style_uniqueness(dup_bogus_style_fam, "self_test:dup_bogus_style")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("self_test failed: style=bogus colliding with style=normal was not rejected")
+    for label, xml_str in [
+        (
+            "self_test:dup_normal",
+            '<family lang="zh-Hans">'
+            '<font weight="400" style="normal">SysSans-Hans-Regular.ttf</font>'
+            '<font weight="400" style="normal">NotoSansCJK-Regular.ttc</font>'
+            "</family>",
+        ),
+        (
+            "self_test:dup_serif",
+            '<family lang="zh-Hans">'
+            '<font weight="400" style="normal" fallbackFor="serif">A.ttc</font>'
+            '<font weight="400" style="normal" fallbackFor="serif">B.ttc</font>'
+            "</family>",
+        ),
+        (
+            "self_test:dup_leading_zero_weight",
+            '<family name="monospace">'
+            '<font weight="400" style="normal">DroidSansMono.ttf</font>'
+            '<font weight="0400" style="normal">DupZero.ttf</font>'
+            "</family>",
+        ),
+        (
+            "self_test:dup_bogus_style",
+            '<family name="monospace">'
+            '<font weight="400" style="normal">DroidSansMono.ttf</font>'
+            '<font weight="400" style="bogus">DupBogus.ttf</font>'
+            "</family>",
+        ),
+    ]:
+        try:
+            assert_family_style_uniqueness(ET.fromstring(xml_str), label)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"self_test failed: {label} was not rejected")
 
 
 def main() -> int:

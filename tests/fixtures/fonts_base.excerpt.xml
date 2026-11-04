@@ -166,6 +166,9 @@
         <font weight="400" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
             <axis tag="wght" stylevalue="400" />
         </font>
+        <font weight="400" style="normal" fallbackFor="serif"
+            postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
+        </font>
         <font weight="500" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
             <axis tag="wght" stylevalue="500" />
         </font>
@@ -184,7 +187,6 @@
         <font weight="1000" style="normal" postScriptName="OPPO_Sans_4.0_SC">SysSans-Hans-Regular.ttf
             <axis tag="wght" stylevalue="1000" />
         </font>
-        <font weight="400" style="normal" index="2" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
     </family>
 
     <!-- Active OPlus zh-Hant,zh-Bopo family -->
@@ -200,6 +202,9 @@
         </font>
         <font weight="400" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
             <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="400" style="normal" fallbackFor="serif"
+            postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
         </font>
         <font weight="500" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
             <axis tag="wght" stylevalue="500" />
@@ -219,7 +224,6 @@
         <font weight="1000" style="normal" postScriptName="OPPO_Sans_4.0_TC">SysSans-Hant-Regular.ttf
             <axis tag="wght" stylevalue="1000" />
         </font>
-        <font weight="400" style="normal" index="3" fallbackFor="serif">NotoSerifCJK-Regular.ttc</font>
     </family>
 
     <!-- Primary ja family -->

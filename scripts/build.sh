@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build script for ksu-noto-fonts-apple-emoji.
 # Fetches pinned upstream fonts and licenses from sources.lock into .cache/downloads,
-# verifies SHA-256 digests, runs tools/check_fonts.py on build/fonts, stages module
+# verifies SHA-256 digests, builds the 8 TTF overlays + 4-face NotoSansCJK-Regular.ttc
+# via tools/make_fonts.py, runs tools/check_fonts.py on build/fonts, stages module
 # payload, packages dist/ksu-noto-fonts-apple-emoji-<version>.zip, and writes .sha256.
 
 set -eu
@@ -33,8 +34,8 @@ MOD_AUTHOR=$(sed -n 's/^author=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
 [ -n "$MOD_AUTHOR" ] || fail "missing author in module/module.prop"
 
 [ "$MOD_ID" = "ksu_noto_fonts_apple_emoji" ] || fail "unexpected id in module/module.prop: $MOD_ID"
-[ "$MOD_VERSION" = "v1.0.1" ] || fail "unexpected version in module/module.prop: $MOD_VERSION (expected v1.0.1)"
-[ "$MOD_VERSION_CODE" = "101" ] || fail "unexpected versionCode in module/module.prop: $MOD_VERSION_CODE (expected 101)"
+[ "$MOD_VERSION" = "v1.0.2" ] || fail "unexpected version in module/module.prop: $MOD_VERSION (expected v1.0.2)"
+[ "$MOD_VERSION_CODE" = "102" ] || fail "unexpected versionCode in module/module.prop: $MOD_VERSION_CODE (expected 102)"
 [ "$MOD_AUTHOR" = "wang1zhen" ] || fail "unexpected author in module/module.prop: $MOD_AUTHOR (expected wang1zhen)"
 
 mkdir -p "$CACHE_DIR"
@@ -99,7 +100,7 @@ while IFS='|' read -r kind dest_name upstream_ref url sha256 || [ -n "${kind:-}"
 
   case "$kind" in
     font)
-      cp -pf "$cached_file" "$FONTS_BUILD_DIR/$dest_name"
+      :
       ;;
     license)
       mkdir -p "$ROOT_DIR/licenses"
@@ -110,6 +111,9 @@ while IFS='|' read -r kind dest_name upstream_ref url sha256 || [ -n "${kind:-}"
       ;;
   esac
 done < "$LOCK_FILE"
+
+printf '%s\n' "==> Generating overlay fonts and 4-face TTC with tools/make_fonts.py..."
+python3 -I "$ROOT_DIR/tools/make_fonts.py" "$CACHE_DIR" "$FONTS_BUILD_DIR" --lock "$LOCK_FILE"
 
 printf '%s\n' "==> Validating fonts with tools/check_fonts.py..."
 python3 -I "$ROOT_DIR/tools/check_fonts.py" "$FONTS_BUILD_DIR" --lock "$LOCK_FILE"
@@ -125,12 +129,14 @@ cp -pf "$ROOT_DIR/module/customize.sh" "$STAGE_DIR/customize.sh"
 cp -pf "$ROOT_DIR/module/tools/fontconfig.sh" "$STAGE_DIR/tools/fontconfig.sh"
 cp -pf "$ROOT_DIR/module/tools/fontxml.awk" "$STAGE_DIR/tools/fontxml.awk"
 cp -pf "$ROOT_DIR/NOTICE.md" "$STAGE_DIR/NOTICE.md"
+cp -pf "$FONTS_BUILD_DIR/font-manifest.txt" "$STAGE_DIR/font-manifest.txt"
 cp -pf "$ROOT_DIR/licenses/"*.txt "$STAGE_DIR/licenses/"
 cp -pf "$FONTS_BUILD_DIR/"*.ttf "$STAGE_DIR/system/fonts/"
+cp -pf "$FONTS_BUILD_DIR/"*.ttc "$STAGE_DIR/system/fonts/"
 
 chmod 0755 "$STAGE_DIR/customize.sh" "$STAGE_DIR/tools/fontconfig.sh"
-chmod 0644 "$STAGE_DIR/module.prop" "$STAGE_DIR/NOTICE.md" "$STAGE_DIR/tools/fontxml.awk"
-chmod 0644 "$STAGE_DIR/licenses/"*.txt "$STAGE_DIR/system/fonts/"*.ttf
+chmod 0644 "$STAGE_DIR/module.prop" "$STAGE_DIR/NOTICE.md" "$STAGE_DIR/font-manifest.txt" "$STAGE_DIR/tools/fontxml.awk"
+chmod 0644 "$STAGE_DIR/licenses/"*.txt "$STAGE_DIR/system/fonts/"*.ttf "$STAGE_DIR/system/fonts/"*.ttc
 
 ZIP_NAME="ksu-noto-fonts-apple-emoji-${MOD_VERSION}.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
@@ -178,6 +184,6 @@ mv -f "$TMP_ZIP" "$ZIP_PATH"
 )
 
 printf '%s\n' "==> Verifying packaged ZIP..."
-sh "$ROOT_DIR/scripts/verify_zip.sh" "$ZIP_PATH"
+FONT_BUILD_DIR="$FONTS_BUILD_DIR" FONT_CACHE_DIR="$CACHE_DIR" sh "$ROOT_DIR/scripts/verify_zip.sh" "$ZIP_PATH"
 
 printf 'Build succeeded: %s\n' "$ZIP_PATH"

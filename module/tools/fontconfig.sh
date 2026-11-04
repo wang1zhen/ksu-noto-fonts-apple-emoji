@@ -1,12 +1,13 @@
 #!/system/bin/sh
-# Install-time OxygenOS 16 / Android 16 font configuration generator.
+# Install-time OxygenOS 16 / Android 16 font configuration & reserved-font generator (v1.0.2).
 # Reads the device's actual /system/etc/font_fallback.xml, /system/etc/fonts.xml, and
 # (when present) /system_ext/etc/fonts_base.xml (including its /system/system_ext/etc/fonts_base.xml
 # SAR alias), validates KernelSU environment, static metamodule entrypoint presence (metamount.sh),
-# absence of unsupported partition overrides or conflicting font modules, stages adapted
-# configs, validates output structure via fontxml.awk -v validate_only=1, and commits to
-# $MODDIR/system/etc/ and $MODDIR/system/system_ext/etc/. Never writes to real system
-# partitions and never mounts filesystems.
+# absence of unsupported partition overrides or conflicting font modules, copies trusted original
+# system fonts (SysSans-Hans-Regular.ttf, SysSans-Hant-Regular.ttf, NotoColorEmoji.ttf) to
+# KsuReserved-*.ttf with SHA-256 + system build fingerprint verification on module upgrade,
+# stages adapted configs, validates output structure via fontxml.awk -v validate_only=1, and
+# commits to $MODDIR/system/. Never writes to real system partitions and never mounts filesystems.
 # Note: Static verification of metamount.sh at install time does not guarantee runtime
 # mounting succeeded after reboot.
 
@@ -25,6 +26,8 @@ DATA_DIR="$MODDIR/data"
 HAS_BASE_XML=0
 BASE_XML_SRC=""
 
+RESERVED_BASE_FONTS="SysSans-Hans-Regular.ttf SysSans-Hant-Regular.ttf NotoColorEmoji.ttf"
+
 cleanup_staging() {
   if [ -n "${STAGING_DIR:-}" ] && [ -d "$STAGING_DIR" ]; then
     rm -rf "$STAGING_DIR"
@@ -39,16 +42,65 @@ fail() {
 
 trap 'fail "interrupted"' INT TERM HUP
 
-# 1. Verify required module fonts exist in $MODDIR/system/fonts
+file_sha256() {
+  sha256sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
+is_valid_fingerprint_value() {
+  fp_val="$1"
+  case "$fp_val" in
+    ''|default-system-fingerprint|unknown|*[[:cntrl:]]*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+get_system_fingerprint() {
+  if [ -n "$SYSTEM_ROOT" ] && [ -n "${FONT_SYSTEM_FINGERPRINT:-}" ]; then
+    fp=$(printf '%s\n' "$FONT_SYSTEM_FINGERPRINT" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if is_valid_fingerprint_value "$fp"; then
+      printf '%s\n' "$fp"
+      return 0
+    fi
+    return 1
+  fi
+  if [ -f "$SYSTEM_ROOT/system/build.prop" ] && [ ! -L "$SYSTEM_ROOT/system/build.prop" ]; then
+    fp=$(sed -n 's/^[[:space:]]*ro\.system\.build\.fingerprint[[:space:]]*=[[:space:]]*//p' "$SYSTEM_ROOT/system/build.prop" 2>/dev/null | head -n 1 | sed 's/[[:space:]]*$//')
+    [ -n "$fp" ] || fp=$(sed -n 's/^[[:space:]]*ro\.build\.fingerprint[[:space:]]*=[[:space:]]*//p' "$SYSTEM_ROOT/system/build.prop" 2>/dev/null | head -n 1 | sed 's/[[:space:]]*$//')
+    if is_valid_fingerprint_value "$fp"; then
+      printf '%s\n' "$fp"
+      return 0
+    fi
+  fi
+  if [ -z "$SYSTEM_ROOT" ] && command -v getprop >/dev/null 2>&1; then
+    fp=$(getprop ro.system.build.fingerprint 2>/dev/null | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -n "$fp" ] || fp=$(getprop ro.build.fingerprint 2>/dev/null | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if is_valid_fingerprint_value "$fp"; then
+      printf '%s\n' "$fp"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+is_xml_polluted() {
+  xml_path="$1"
+  grep -Eq 'KsuReserved-|KsuAppleColorEmoji|NotoSans-Italic\.ttf|KSU-' "$xml_path" 2>/dev/null
+}
+
+# 1. Verify required bundled module fonts exist in $MODDIR/system/fonts
 check_bundled_fonts() {
   for f in \
-    KSU-NotoSans-Regular-VF.ttf \
-    KSU-NotoSans-Italic-VF.ttf \
-    KSU-NotoSansCJKsc-VF.ttf \
-    KSU-NotoSansCJKtc-VF.ttf \
-    KSU-NotoSansCJKjp-VF.ttf \
-    KSU-NotoSansCJKkr-VF.ttf \
-    KSU-AppleColorEmoji.ttf
+    Roboto-Regular.ttf \
+    SysFont-Regular.ttf \
+    SysSans-En-Regular.ttf \
+    OPSans-En-Regular.ttf \
+    NotoSans-Italic.ttf \
+    SysSans-Hans-Regular.ttf \
+    SysSans-Hant-Regular.ttf \
+    NotoSansCJK-Regular.ttc \
+    NotoColorEmoji.ttf
   do
     if [ ! -s "$MODDIR/system/fonts/$f" ]; then
       fail "missing_bundled_font:$f"
@@ -354,68 +406,162 @@ check_unsupported_partition_overrides() {
   resolve_system_ext_fonts_base
 }
 
-# 5. Stage original system font configs (reusing clean backup on module upgrade)
+verify_saved_hash() {
+  sums_file="$1"
+  rel_key="$2"
+  target_file="$3"
+
+  if [ ! -f "$target_file" ] || [ -L "$target_file" ] || [ ! -s "$target_file" ]; then
+    fail "incomplete_backup_or_reserved_fonts_disable_and_reboot:$rel_key"
+  fi
+
+  expected_hash=$(awk -v k="$rel_key" '$1 == k { print $2; exit }' "$sums_file" 2>/dev/null || :)
+  if [ -z "$expected_hash" ]; then
+    fail "corrupted_backup_or_reserved_font_hash_mismatch:$rel_key"
+  fi
+  actual_hash=$(file_sha256 "$target_file")
+  if [ -z "$actual_hash" ] || [ "$actual_hash" != "$expected_hash" ]; then
+    fail "corrupted_backup_or_reserved_font_hash_mismatch:$rel_key"
+  fi
+}
+
+# 5. Stage original system font configs and reserved original system fonts
+#    (reusing verified backup on module upgrade when fingerprint + SHA-256 match)
 stage_originals() {
   src_fallback="$SYSTEM_ROOT/system/etc/font_fallback.xml"
   src_legacy="$SYSTEM_ROOT/system/etc/fonts.xml"
-  old_orig="$ADB_ROOT/modules/$MODID/config/original"
+  sys_fonts_dir="$SYSTEM_ROOT/system/fonts"
+  old_mod="$ADB_ROOT/modules/$MODID"
 
   staged_orig_fb="$STAGING_DIR/orig/etc/font_fallback.xml"
   staged_orig_leg="$STAGING_DIR/orig/etc/fonts.xml"
+  staged_orig_base="$STAGING_DIR/orig/system_ext/etc/fonts_base.xml"
+  staged_fonts_dir="$STAGING_DIR/fonts"
 
-  if [ -s "$ORIGINAL_DIR/etc/font_fallback.xml" ] && [ -s "$ORIGINAL_DIR/etc/fonts.xml" ]; then
-    if grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/etc/font_fallback.xml" 2>/dev/null || \
-       grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/etc/fonts.xml" 2>/dev/null; then
+  cur_fp=$(get_system_fingerprint) || fail "unable_to_read_system_fingerprint"
+  is_valid_fingerprint_value "$cur_fp" || fail "unable_to_read_system_fingerprint"
+
+  backup_mod=""
+  if [ -d "$ORIGINAL_DIR" ]; then
+    backup_mod="$MODDIR"
+  elif [ -d "$old_mod" ]; then
+    backup_mod="$old_mod"
+  fi
+
+  if [ -n "$backup_mod" ]; then
+    b_orig="$backup_mod/config/original"
+    b_fonts="$backup_mod/system/fonts"
+    b_fp_file="$b_orig/fingerprint"
+    b_sums_file="$b_orig/sha256sums"
+
+    if [ ! -f "$b_fp_file" ] || [ -L "$b_fp_file" ] || [ ! -s "$b_fp_file" ] || \
+       [ ! -f "$b_sums_file" ] || [ -L "$b_sums_file" ] || [ ! -s "$b_sums_file" ]; then
+      fail "missing_or_untrusted_backup_metadata_disable_and_reboot"
+    fi
+
+    saved_fp=$(head -n 1 "$b_fp_file" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if ! is_valid_fingerprint_value "$saved_fp"; then
+      fail "missing_or_untrusted_backup_metadata_disable_and_reboot"
+    fi
+    if [ "$saved_fp" != "$cur_fp" ]; then
+      fail "system_fingerprint_changed_after_ota_disable_and_reboot"
+    fi
+
+    verify_saved_hash "$b_sums_file" "etc/font_fallback.xml" "$b_orig/etc/font_fallback.xml"
+    verify_saved_hash "$b_sums_file" "etc/fonts.xml" "$b_orig/etc/fonts.xml"
+
+    if is_xml_polluted "$b_orig/etc/font_fallback.xml" || is_xml_polluted "$b_orig/etc/fonts.xml"; then
       fail "live_system_config_already_modified_without_backup"
     fi
-    cp -pf "$ORIGINAL_DIR/etc/font_fallback.xml" "$staged_orig_fb" || fail "backup_copy_failed"
-    cp -pf "$ORIGINAL_DIR/etc/fonts.xml" "$staged_orig_leg" || fail "backup_copy_failed"
-  elif [ -s "$old_orig/etc/font_fallback.xml" ] && [ -s "$old_orig/etc/fonts.xml" ]; then
-    if grep -q "KSU-NotoSans-" "$old_orig/etc/font_fallback.xml" 2>/dev/null || \
-       grep -q "KSU-NotoSans-" "$old_orig/etc/fonts.xml" 2>/dev/null; then
-      fail "live_system_config_already_modified_without_backup"
+
+    cp -pf "$b_orig/etc/font_fallback.xml" "$staged_orig_fb" || fail "backup_copy_failed"
+    cp -pf "$b_orig/etc/fonts.xml" "$staged_orig_leg" || fail "backup_copy_failed"
+
+    for orig_font in $RESERVED_BASE_FONTS; do
+      res_name="KsuReserved-$orig_font"
+      verify_saved_hash "$b_sums_file" "fonts/$res_name" "$b_fonts/$res_name"
+      res_hash=$(file_sha256 "$b_fonts/$res_name")
+      mod_hash=$(file_sha256 "$MODDIR/system/fonts/$orig_font")
+      if [ -n "$res_hash" ] && [ "$res_hash" = "$mod_hash" ]; then
+        fail "polluted_reserved_font_matches_module_payload:$res_name"
+      fi
+      cp -pf "$b_fonts/$res_name" "$staged_fonts_dir/$res_name" || fail "reserved_font_copy_failed:$res_name"
+    done
+
+    if [ "$HAS_BASE_XML" -eq 1 ]; then
+      mkdir -p "$STAGING_DIR/orig/system_ext/etc" "$STAGING_DIR/system_ext/etc" || fail "backup_mkdir_failed"
+      if [ -e "$b_orig/system_ext/etc/fonts_base.xml" ] || \
+         awk '$1 == "system_ext/etc/fonts_base.xml" { found=1 } END { exit(found ? 0 : 1) }' "$b_sums_file" 2>/dev/null; then
+        verify_saved_hash "$b_sums_file" "system_ext/etc/fonts_base.xml" "$b_orig/system_ext/etc/fonts_base.xml"
+        if is_xml_polluted "$b_orig/system_ext/etc/fonts_base.xml"; then
+          fail "live_system_config_already_modified_without_backup"
+        fi
+        cp -pf "$b_orig/system_ext/etc/fonts_base.xml" "$staged_orig_base" || fail "backup_copy_failed"
+      else
+        if [ ! -f "$BASE_XML_SRC" ]; then
+          fail "missing_system_ext_fonts_base_xml"
+        fi
+        if is_xml_polluted "$BASE_XML_SRC"; then
+          fail "live_system_config_already_modified_without_backup"
+        fi
+        cp -pf "$BASE_XML_SRC" "$staged_orig_base" || fail "backup_copy_failed"
+      fi
     fi
-    cp -pf "$old_orig/etc/font_fallback.xml" "$staged_orig_fb" || fail "backup_copy_failed"
-    cp -pf "$old_orig/etc/fonts.xml" "$staged_orig_leg" || fail "backup_copy_failed"
   else
+    # Fresh installation: require clean, unpolluted live XMLs and original system fonts
     if [ ! -f "$src_fallback" ]; then
       fail "missing_system_font_fallback_xml"
     fi
     if [ ! -f "$src_legacy" ]; then
       fail "missing_system_fonts_xml"
     fi
-    # Refuse if live /system/etc/fonts.xml already contains KSU-NotoSans markers (polluted live overlay without backup)
-    if grep -q "KSU-NotoSans-" "$src_fallback" 2>/dev/null || grep -q "KSU-NotoSans-" "$src_legacy" 2>/dev/null; then
+    if is_xml_polluted "$src_fallback" || is_xml_polluted "$src_legacy"; then
       fail "live_system_config_already_modified_without_backup"
     fi
     cp -pf "$src_fallback" "$staged_orig_fb" || fail "backup_copy_failed"
     cp -pf "$src_legacy" "$staged_orig_leg" || fail "backup_copy_failed"
-  fi
 
-  if [ "$HAS_BASE_XML" -eq 1 ]; then
-    staged_orig_base="$STAGING_DIR/orig/system_ext/etc/fonts_base.xml"
-    mkdir -p "$STAGING_DIR/orig/system_ext/etc" "$STAGING_DIR/system_ext/etc" || fail "backup_mkdir_failed"
-
-    if [ -s "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" ]; then
-      if grep -q "KSU-NotoSans-" "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" 2>/dev/null; then
-        fail "live_system_config_already_modified_without_backup"
-      fi
-      cp -pf "$ORIGINAL_DIR/system_ext/etc/fonts_base.xml" "$staged_orig_base" || fail "backup_copy_failed"
-    elif [ -s "$old_orig/system_ext/etc/fonts_base.xml" ]; then
-      if grep -q "KSU-NotoSans-" "$old_orig/system_ext/etc/fonts_base.xml" 2>/dev/null; then
-        fail "live_system_config_already_modified_without_backup"
-      fi
-      cp -pf "$old_orig/system_ext/etc/fonts_base.xml" "$staged_orig_base" || fail "backup_copy_failed"
-    else
+    if [ "$HAS_BASE_XML" -eq 1 ]; then
+      mkdir -p "$STAGING_DIR/orig/system_ext/etc" "$STAGING_DIR/system_ext/etc" || fail "backup_mkdir_failed"
       if [ ! -f "$BASE_XML_SRC" ]; then
         fail "missing_system_ext_fonts_base_xml"
       fi
-      if grep -q "KSU-NotoSans-" "$BASE_XML_SRC" 2>/dev/null; then
+      if is_xml_polluted "$BASE_XML_SRC"; then
         fail "live_system_config_already_modified_without_backup"
       fi
       cp -pf "$BASE_XML_SRC" "$staged_orig_base" || fail "backup_copy_failed"
     fi
+
+    for orig_font in $RESERVED_BASE_FONTS; do
+      res_name="KsuReserved-$orig_font"
+      live_font="$sys_fonts_dir/$orig_font"
+      if [ -e "$sys_fonts_dir/$res_name" ] || [ -L "$sys_fonts_dir/$res_name" ]; then
+        fail "live_system_fonts_already_polluted_without_backup:$res_name"
+      fi
+      if [ ! -f "$live_font" ] || [ -L "$live_font" ] || [ ! -s "$live_font" ]; then
+        fail "missing_trusted_system_font:$orig_font"
+      fi
+      live_hash=$(file_sha256 "$live_font")
+      mod_hash=$(file_sha256 "$MODDIR/system/fonts/$orig_font")
+      if [ -z "$live_hash" ] || [ "$live_hash" = "$mod_hash" ]; then
+        fail "live_system_font_already_overlaid_without_backup:$orig_font"
+      fi
+      cp -pf "$live_font" "$staged_fonts_dir/$res_name" || fail "reserved_font_copy_failed:$res_name"
+    done
   fi
+
+  # Write staged fingerprint and sha256sums manifest
+  printf '%s\n' "$cur_fp" > "$STAGING_DIR/orig/fingerprint" || fail "write_fingerprint_failed"
+  : > "$STAGING_DIR/orig/sha256sums" || fail "write_sha256sums_failed"
+  printf 'etc/font_fallback.xml %s\n' "$(file_sha256 "$staged_orig_fb")" >> "$STAGING_DIR/orig/sha256sums"
+  printf 'etc/fonts.xml %s\n' "$(file_sha256 "$staged_orig_leg")" >> "$STAGING_DIR/orig/sha256sums"
+  if [ "$HAS_BASE_XML" -eq 1 ]; then
+    printf 'system_ext/etc/fonts_base.xml %s\n' "$(file_sha256 "$staged_orig_base")" >> "$STAGING_DIR/orig/sha256sums"
+  fi
+  for orig_font in $RESERVED_BASE_FONTS; do
+    res_name="KsuReserved-$orig_font"
+    printf 'fonts/%s %s\n' "$res_name" "$(file_sha256 "$staged_fonts_dir/$res_name")" >> "$STAGING_DIR/orig/sha256sums"
+  done
 }
 
 # 6. Validate generated XML invariants before committing using fontxml.awk validate_only mode
@@ -434,16 +580,36 @@ verify_generated_xml() {
   esac
 
   for req_font in \
-    KSU-NotoSans-Regular-VF.ttf \
-    KSU-NotoSans-Italic-VF.ttf \
-    KSU-NotoSansCJKsc-VF.ttf \
-    KSU-NotoSansCJKtc-VF.ttf \
-    KSU-NotoSansCJKjp-VF.ttf \
-    KSU-NotoSansCJKkr-VF.ttf \
-    KSU-AppleColorEmoji.ttf
+    Roboto-Regular.ttf \
+    NotoSans-Italic.ttf \
+    NotoSansCJK-Regular.ttc \
+    NotoColorEmoji.ttf \
+    KsuReserved-NotoColorEmoji.ttf \
+    KsuAppleColorEmoji
   do
     grep -q "$req_font" "$out_file" || fail "missing_font_ref_in_${mode}:$req_font"
   done
+
+  if [ "$mode" = "legacy" ]; then
+    grep -q "SysFont-Regular.ttf" "$out_file" || fail "missing_font_ref_in_legacy:SysFont-Regular.ttf"
+  fi
+
+  if [ "$mode" = "legacy" ] || [ "$mode" = "base" ]; then
+    for req_font in \
+      SysSans-En-Regular.ttf \
+      OPSans-En-Regular.ttf \
+      SysSans-Hans-Regular.ttf \
+      SysSans-Hant-Regular.ttf \
+      KsuReserved-SysSans-Hans-Regular.ttf \
+      KsuReserved-SysSans-Hant-Regular.ttf
+    do
+      grep -q "$req_font" "$out_file" || fail "missing_font_ref_in_${mode}:$req_font"
+    done
+  fi
+
+  if grep -q "KSU-" "$out_file" 2>/dev/null; then
+    fail "legacy_ksu_font_ref_in_${mode}"
+  fi
 
   awk -v mode="$mode" -v validate_only=1 -f "$AWK_SCRIPT" "$out_file" >/dev/null || \
     fail "post_check_xml_structure_failed:$mode"
@@ -457,7 +623,7 @@ run_prepare() {
   check_unsupported_partition_overrides
 
   cleanup_staging
-  mkdir -p "$STAGING_DIR/etc" "$STAGING_DIR/orig/etc" || fail "staging_mkdir_failed"
+  mkdir -p "$STAGING_DIR/etc" "$STAGING_DIR/orig/etc" "$STAGING_DIR/fonts" || fail "staging_mkdir_failed"
   stage_originals
 
   awk -v mode="fallback" -v stats="$STAGING_DIR/fallback.stats" \
@@ -480,9 +646,18 @@ run_prepare() {
     verify_generated_xml "$STAGING_DIR/system_ext/etc/fonts_base.xml" "base" "$STAGING_DIR/base.stats"
   fi
 
-  mkdir -p "$ORIGINAL_DIR/etc" "$MODDIR/system/etc" "$DATA_DIR" || fail "system_etc_mkdir_failed"
+  mkdir -p "$ORIGINAL_DIR/etc" "$MODDIR/system/etc" "$MODDIR/system/fonts" "$DATA_DIR" || fail "system_etc_mkdir_failed"
   cp -pf "$STAGING_DIR/orig/etc/font_fallback.xml" "$ORIGINAL_DIR/etc/font_fallback.xml" || fail "backup_copy_failed"
   cp -pf "$STAGING_DIR/orig/etc/fonts.xml" "$ORIGINAL_DIR/etc/fonts.xml" || fail "backup_copy_failed"
+  cp -pf "$STAGING_DIR/orig/fingerprint" "$ORIGINAL_DIR/fingerprint" || fail "backup_copy_failed"
+  cp -pf "$STAGING_DIR/orig/sha256sums" "$ORIGINAL_DIR/sha256sums" || fail "backup_copy_failed"
+
+  for orig_font in $RESERVED_BASE_FONTS; do
+    res_name="KsuReserved-$orig_font"
+    chmod 0644 "$STAGING_DIR/fonts/$res_name" || fail "chmod_failed"
+    mv -f "$STAGING_DIR/fonts/$res_name" "$MODDIR/system/fonts/$res_name" || fail "commit_reserved_font_failed:$res_name"
+  done
+
   chmod 0644 "$STAGING_DIR/etc/font_fallback.xml" "$STAGING_DIR/etc/fonts.xml" || fail "chmod_failed"
   mv -f "$STAGING_DIR/etc/font_fallback.xml" "$MODDIR/system/etc/font_fallback.xml" || fail "commit_fallback_failed"
   mv -f "$STAGING_DIR/etc/fonts.xml" "$MODDIR/system/etc/fonts.xml" || fail "commit_legacy_failed"

@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# KernelSU module install script for OnePlus 13 / Android 16 / OxygenOS 16.
+# KernelSU module install script for OnePlus 13 / Android 16 / OxygenOS 16 (v1.0.2).
 # Runs inside the KernelSU installer environment where $MODPATH, ui_print, abort,
 # set_perm, and set_perm_recursive are provided.
 
@@ -62,10 +62,14 @@ prep_rc=$?
 if [ "$prep_rc" -ne 0 ]; then
   ui_print "! Font configuration adaptation failed:"
   ui_print "! $prep_out"
-  rm -rf "$MODPATH/.staging" "$MODPATH/system/etc" "$MODPATH/system/system_ext" 2>/dev/null || :
+  rm -rf "$MODPATH/.staging" "$MODPATH/system/etc" "$MODPATH/system/system_ext" "$MODPATH/config" "$MODPATH/data" \
+    "$MODPATH/system/fonts/KsuReserved-SysSans-Hans-Regular.ttf" \
+    "$MODPATH/system/fonts/KsuReserved-SysSans-Hant-Regular.ttf" \
+    "$MODPATH/system/fonts/KsuReserved-NotoColorEmoji.ttf" 2>/dev/null || :
   abort "! Installation aborted safely without modifying system partitions"
 fi
 
+ui_print "- Preserved original system fonts as KsuReserved-*.ttf for serif & emoji fallback"
 ui_print "- Adapted /system/etc/font_fallback.xml and /system/etc/fonts.xml"
 if [ -f "$MODPATH/system/system_ext/etc/fonts_base.xml" ]; then
   ui_print "- Adapted /system_ext/etc/fonts_base.xml"
@@ -86,4 +90,4 @@ set_perm "$MODPATH/tools/fontconfig.sh" 0 0 0755
 set_perm "$MODPATH/tools/fontxml.awk" 0 0 0644
 
 ui_print "- Static metamodule entrypoint (metamount.sh) verified; actual mount occurs on reboot."
-ui_print "- Installation complete. Reboot device and verify /system/fonts/KSU-* is mounted."
+ui_print "- Installation complete. Reboot device to activate font overlay."
