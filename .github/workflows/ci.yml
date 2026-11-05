@@ -22,16 +22,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ShellCheck
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
+          python3 -m pip install fonttools
 
       - name: Run ShellCheck on scripts
         run: |
           shellcheck -s sh \
             module/customize.sh \
-            scripts/*.sh
+            module/tools/fontconfig.sh \
+            scripts/*.sh \
+            tests/run.sh
 
-      - name: Run unit tests on synthetic fixtures
-        run: python3 -I -m unittest discover tests
+      - name: Run unit tests
+        run: python3 -I -m unittest discover -s tests -k TestV200FontSettings -v

@@ -1,17 +1,16 @@
 #!/bin/sh
-# Build script for ksu-noto-fonts-apple-emoji (v1.0.3).
+# Build script for ksu-noto-fonts-apple-emoji (v2.0.0).
 # Fetches pinned upstream fonts and licenses from sources.lock into .cache/downloads,
-# verifies SHA-256 digests, builds the 8 TTFs + 4-face NotoSansCJK-Regular.ttc
-# via tools/make_fonts.py, runs tools/check_fonts.py on build/fonts, builds the
-# 3 fixed XML configs via tools/make_xml.py from the root OEM XML inputs, writes
-# payload.sha256, packages dist/ksu-noto-fonts-apple-emoji-v1.0.3.zip, and verifies it.
+# verifies SHA-256 digests, builds the 7 standalone TTFs with host-side cmap role
+# isolation via tools/make_fonts.py, runs tools/check_fonts.py on build/fonts,
+# stages the KernelSU module directory, packages dist/ksu-noto-fonts-apple-emoji-v2.0.0.zip,
+# and verifies it via scripts/verify_zip.sh.
 
 set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "${0%/*}/.." && pwd)
 LOCK_FILE="$ROOT_DIR/sources.lock"
 CACHE_DIR="${FONT_CACHE_DIR:-$ROOT_DIR/.cache/downloads}"
-XML_INPUT_DIR="${FONT_XML_INPUT_DIR:-$ROOT_DIR}"
 BUILD_DIR="$ROOT_DIR/build"
 FONTS_BUILD_DIR="$BUILD_DIR/fonts"
 STAGE_DIR="$BUILD_DIR/module"
@@ -23,6 +22,7 @@ fail() {
 }
 
 [ -f "$LOCK_FILE" ] || fail "sources.lock not found at $LOCK_FILE"
+[ -f "$ROOT_DIR/LICENSE" ] || fail "LICENSE not found at $ROOT_DIR/LICENSE"
 [ -f "$ROOT_DIR/module/module.prop" ] || fail "module/module.prop not found"
 
 MOD_ID=$(sed -n 's/^id=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
@@ -36,8 +36,8 @@ MOD_AUTHOR=$(sed -n 's/^author=//p' "$ROOT_DIR/module/module.prop" | head -n 1)
 [ -n "$MOD_AUTHOR" ] || fail "missing author in module/module.prop"
 
 [ "$MOD_ID" = "ksu_noto_fonts_apple_emoji" ] || fail "unexpected id in module/module.prop: $MOD_ID"
-[ "$MOD_VERSION" = "v1.0.3" ] || fail "unexpected version in module/module.prop: $MOD_VERSION (expected v1.0.3)"
-[ "$MOD_VERSION_CODE" = "103" ] || fail "unexpected versionCode in module/module.prop: $MOD_VERSION_CODE (expected 103)"
+[ "$MOD_VERSION" = "v2.0.0" ] || fail "unexpected version in module/module.prop: $MOD_VERSION (expected v2.0.0)"
+[ "$MOD_VERSION_CODE" = "200" ] || fail "unexpected versionCode in module/module.prop: $MOD_VERSION_CODE (expected 200)"
 [ "$MOD_AUTHOR" = "wang1zhen" ] || fail "unexpected author in module/module.prop: $MOD_AUTHOR (expected wang1zhen)"
 
 mkdir -p "$CACHE_DIR"
@@ -114,70 +114,36 @@ while IFS='|' read -r kind dest_name upstream_ref url sha256 || [ -n "${kind:-}"
   esac
 done < "$LOCK_FILE"
 
-printf '%s\n' "==> Generating module fonts and 4-face TTC with tools/make_fonts.py..."
+printf '%s\n' "==> Building role-isolated module fonts with tools/make_fonts.py..."
 python3 -I "$ROOT_DIR/tools/make_fonts.py" "$CACHE_DIR" "$FONTS_BUILD_DIR" --lock "$LOCK_FILE"
 
 printf '%s\n' "==> Validating fonts with tools/check_fonts.py..."
 python3 -I "$ROOT_DIR/tools/check_fonts.py" "$FONTS_BUILD_DIR" --lock "$LOCK_FILE"
 
-printf '%s\n' "==> Generating fixed XML configs with tools/make_xml.py..."
-python3 -I "$ROOT_DIR/tools/make_xml.py" "$XML_INPUT_DIR" "$STAGE_DIR"
-
 printf '%s\n' "==> Staging KernelSU module directory..."
 mkdir -p \
   "$STAGE_DIR/system/fonts" \
+  "$STAGE_DIR/tools" \
   "$STAGE_DIR/licenses"
 
 cp -pf "$ROOT_DIR/module/module.prop" "$STAGE_DIR/module.prop"
 cp -pf "$ROOT_DIR/module/customize.sh" "$STAGE_DIR/customize.sh"
+cp -pf "$ROOT_DIR/module/tools/fontconfig.sh" "$STAGE_DIR/tools/fontconfig.sh"
+cp -pf "$ROOT_DIR/module/tools/fontxml.awk" "$STAGE_DIR/tools/fontxml.awk"
+cp -pf "$ROOT_DIR/LICENSE" "$STAGE_DIR/LICENSE"
 cp -pf "$ROOT_DIR/NOTICE.md" "$STAGE_DIR/NOTICE.md"
 cp -pf "$FONTS_BUILD_DIR/font-manifest.txt" "$STAGE_DIR/font-manifest.txt"
 cp -pf "$ROOT_DIR/licenses/"*.txt "$STAGE_DIR/licenses/"
 cp -pf "$FONTS_BUILD_DIR/"*.ttf "$STAGE_DIR/system/fonts/"
-cp -pf "$FONTS_BUILD_DIR/"*.ttc "$STAGE_DIR/system/fonts/"
 
-python3 -I - "$STAGE_DIR" <<'PYEOF'
-import hashlib
-import os
-import sys
-
-stage_dir = sys.argv[1]
-payload_rel_paths = []
-for root, dirs, files in os.walk(stage_dir):
-    dirs.sort()
-    files.sort()
-    for f in files:
-        full = os.path.join(root, f)
-        rel = os.path.relpath(full, stage_dir).replace(os.sep, "/")
-        if rel in ("payload.sha256", "customize.sh"):
-            continue
-        payload_rel_paths.append(rel)
-
-payload_rel_paths.sort()
-out_path = os.path.join(stage_dir, "payload.sha256")
-with open(out_path, "w", encoding="utf-8", newline="\n") as pf:
-    for rel in payload_rel_paths:
-        h = hashlib.sha256()
-        with open(os.path.join(stage_dir, rel), "rb") as fh:
-            while True:
-                chunk = fh.read(1024 * 1024)
-                if not chunk:
-                    break
-                h.update(chunk)
-        pf.write(f"{h.hexdigest().lower()}  {rel}\n")
-PYEOF
-
-chmod 0755 "$STAGE_DIR/customize.sh"
+chmod 0755 "$STAGE_DIR/customize.sh" "$STAGE_DIR/tools/fontconfig.sh"
 chmod 0644 \
   "$STAGE_DIR/module.prop" \
+  "$STAGE_DIR/LICENSE" \
   "$STAGE_DIR/NOTICE.md" \
   "$STAGE_DIR/font-manifest.txt" \
-  "$STAGE_DIR/device-sources.sha256" \
-  "$STAGE_DIR/payload.sha256" \
-  "$STAGE_DIR/system/etc/font_fallback.xml" \
-  "$STAGE_DIR/system/etc/fonts.xml" \
-  "$STAGE_DIR/system/system_ext/etc/fonts_base.xml"
-chmod 0644 "$STAGE_DIR/licenses/"*.txt "$STAGE_DIR/system/fonts/"*.ttf "$STAGE_DIR/system/fonts/"*.ttc
+  "$STAGE_DIR/tools/fontxml.awk"
+chmod 0644 "$STAGE_DIR/licenses/"*.txt "$STAGE_DIR/system/fonts/"*.ttf
 
 ZIP_NAME="ksu-noto-fonts-apple-emoji-${MOD_VERSION}.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"

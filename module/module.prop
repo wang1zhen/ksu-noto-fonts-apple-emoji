@@ -1,6 +1,6 @@
 id=ksu_noto_fonts_apple_emoji
-name=Noto Sans + Noto Sans CJK + Apple Emoji (OOS16)
-version=v1.0.3
-versionCode=103
+name=Noto Sans + Noto Sans CJK + Apple Emoji
+version=v2.0.0
+versionCode=200
 author=wang1zhen
-description=Fixed OnePlus 13 / Android 16 / OxygenOS 16 font package with Noto Sans VF (upright+italic), 4-face NotoSansCJK-Regular.ttc + dedicated Noto Sans CJK SC/TC VF, Apple Color Emoji (CBDT/CBLC), and prebuilt device-matched XML configs.
+description=Install-time Android font config adaptation with role-isolated Noto Sans VF (upright+italic), full Noto Sans CJK SC/TC/JP/KR VF TTFs, and Apple Color Emoji (CBDT/CBLC).

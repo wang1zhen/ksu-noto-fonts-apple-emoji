@@ -1,18 +1,16 @@
 #!/bin/sh
-# Verifies one or more packaged KernelSU font module ZIP archives (v1.0.3).
-# Checks ZIP integrity, path safety (no '..', leading '/', backslashes, or symlinks),
-# presence of all required files (9 fonts, 3 fixed XML configs, device-sources.sha256,
-# payload.sha256, font-manifest.txt, licenses, module.prop, customize.sh, NOTICE.md),
-# absence of unexpected files, runtime tools, or reserved OEM copies (KsuReserved-*),
-# exact SHA-256 match against sources.lock, device-sources.sha256, payload.sha256,
-# and validated build/fonts artifacts, plus full fontTools 4-face TTC verification.
+# Verifies one or more packaged KernelSU font module ZIP archives (v2.0.0).
+# Checks ZIP integrity, path safety, exact required entry set (7 standalone role-isolated TTFs,
+# font-manifest.txt, tools/fontconfig.sh, tools/fontxml.awk, module.prop, customize.sh,
+# LICENSE, NOTICE.md, 3 license files), absence of fixed XMLs / TTCs / OEM copies / WebUI /
+# action / service / post-fs-data scripts, and exact SHA-256 match against sources.lock and
+# validated build/fonts artifacts.
 
 set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "${0%/*}/.." && pwd)
 LOCK_FILE="${FONT_LOCK_FILE:-$ROOT_DIR/sources.lock}"
 BUILD_FONTS_DIR="${FONT_BUILD_DIR:-$ROOT_DIR/build/fonts}"
-CACHE_DIR="${FONT_CACHE_DIR:-$ROOT_DIR/.cache/downloads}"
 
 if [ "$#" -lt 1 ]; then
   printf 'Usage: %s <zip_path> [zip_path...]\n' "$0" >&2
@@ -42,24 +40,21 @@ for zip_path in "$@"; do
     }
   fi
 
-  python3 -I - "$zip_path" "$LOCK_FILE" "$ROOT_DIR" "$BUILD_FONTS_DIR" "$CACHE_DIR" <<'PYEOF'
+  python3 -I - "$zip_path" "$LOCK_FILE" "$ROOT_DIR" "$BUILD_FONTS_DIR" <<'PYEOF'
 import hashlib
 import os
 import stat
 import sys
-import xml.etree.ElementTree as ET
 import zipfile
 
 zip_path = sys.argv[1]
 lock_path = sys.argv[2]
 root_dir = sys.argv[3]
 build_fonts_dir = sys.argv[4]
-cache_dir = sys.argv[5]
 default_lock_path = os.path.join(root_dir, "sources.lock")
 
 sys.path.insert(0, os.path.join(root_dir, "tools"))
 import check_fonts as cf
-import make_xml as mx
 
 
 def fail(msg: str) -> None:
@@ -85,20 +80,6 @@ with open(lock_path, "r", encoding="utf-8") as lf:
         else:
             fail(f"unknown kind in sources.lock: {kind}")
 
-OVERLAY_TTF_MAP = {
-    fname: spec["upstream"]
-    for fname, spec in cf.EXPECTED_TTF_SPECS.items()
-}
-
-for target_name, upstream_name in sorted(OVERLAY_TTF_MAP.items()):
-    if upstream_name not in raw_fonts:
-        fail(f"missing {upstream_name} in {lock_path}")
-    expected_hashes[f"system/fonts/{target_name}"] = raw_fonts[upstream_name]
-
-for ttc_src in cf.TTC_SOURCES:
-    if ttc_src not in raw_fonts:
-        fail(f"missing TTC source font {ttc_src} in {lock_path}")
-
 if not os.path.isdir(build_fonts_dir):
     fail(f"validated build fonts directory not found: {build_fonts_dir}")
 
@@ -106,42 +87,71 @@ build_manifest_path = os.path.join(build_fonts_dir, cf.MANIFEST_FILENAME)
 if not os.path.isfile(build_manifest_path):
     fail(f"validated build font manifest not found: {build_manifest_path}")
 
-try:
-    with open(build_manifest_path, "rb") as bmf:
-        build_manifest_bytes = bmf.read()
-    build_manifest_text = build_manifest_bytes.decode("utf-8")
-except Exception as exc:
-    fail(f"failed to read build font manifest {build_manifest_path}: {exc}")
+with open(build_manifest_path, "rb") as bmf:
+    build_manifest_bytes = bmf.read()
+build_manifest_text = build_manifest_bytes.decode("utf-8")
 
 build_font_hashes = {}
 build_font_sizes = {}
-for fname in sorted(set(OVERLAY_TTF_MAP.keys()) | {cf.TTC_FILENAME}):
+for fname in sorted(cf.EXPECTED_TTF_SPECS.keys()):
     fpath = os.path.join(build_fonts_dir, fname)
     if not os.path.isfile(fpath):
         fail(f"missing validated build font artifact: {fpath}")
-    build_font_hashes[f"system/fonts/{fname}"] = cf.sha256_file(fpath)
-    build_font_sizes[f"system/fonts/{fname}"] = os.path.getsize(fpath)
+    rel = f"system/fonts/{fname}"
+    build_font_hashes[rel] = cf.sha256_file(fpath)
+    build_font_sizes[rel] = os.path.getsize(fpath)
+    expected_hashes[rel] = build_font_hashes[rel]
 
-bm_errs, bm_hashes = cf.validate_font_manifest_text(
+bm_errs, _bm_hashes = cf.validate_font_manifest_text(
     build_manifest_text, raw_fonts, build_font_hashes
 )
 if bm_errs:
     fail(f"invalid build font manifest ({build_manifest_path}): {bm_errs[0]}")
 
-ttc_zip_path = f"system/fonts/{cf.TTC_FILENAME}"
-expected_hashes[ttc_zip_path] = bm_hashes[ttc_zip_path]
+repo_file_map = {
+    "module.prop": os.path.join(root_dir, "module", "module.prop"),
+    "customize.sh": os.path.join(root_dir, "module", "customize.sh"),
+    "tools/fontconfig.sh": os.path.join(root_dir, "module", "tools", "fontconfig.sh"),
+    "tools/fontxml.awk": os.path.join(root_dir, "module", "tools", "fontxml.awk"),
+    "LICENSE": os.path.join(root_dir, "LICENSE"),
+    "NOTICE.md": os.path.join(root_dir, "NOTICE.md"),
+}
+for zrel, rpath in repo_file_map.items():
+    if not os.path.isfile(rpath):
+        fail(f"missing source file in repository: {rpath}")
+    expected_hashes[zrel] = cf.sha256_file(rpath)
 
-required_xml_paths = set(mx.EXPECTED_DEVICE_SOURCE_HASHES.keys())
-required_non_locked = {
-    "module.prop",
-    "customize.sh",
-    "NOTICE.md",
-    cf.MANIFEST_FILENAME,
+expected_hashes[cf.MANIFEST_FILENAME] = hashlib.sha256(build_manifest_bytes).hexdigest().lower()
+required_all = set(expected_hashes.keys())
+
+FORBIDDEN_PREFIXES = (
+    "webroot/",
+    "webui/",
+    "config/",
+    "data/",
+    "emoji/",
+    "system/etc/",
+    "system/system_ext/",
+    "system/product/",
+    "system/vendor/",
+)
+FORBIDDEN_NAMES = {
+    "action.sh",
+    "service.sh",
+    "post-fs-data.sh",
+    "tools/fontctl.sh",
     "device-sources.sha256",
     "payload.sha256",
-} | required_xml_paths
-
-required_all = set(expected_hashes.keys()) | required_non_locked
+    "system/fonts/NotoSansCJK-Regular.ttc",
+    "system/fonts/Roboto-Regular.ttf",
+    "system/fonts/SysFont-Regular.ttf",
+    "system/fonts/SysSans-En-Regular.ttf",
+    "system/fonts/OPSans-En-Regular.ttf",
+    "system/fonts/SysSans-Hans-Regular.ttf",
+    "system/fonts/SysSans-Hant-Regular.ttf",
+    "system/fonts/NotoColorEmoji.ttf",
+    "system/fonts/NotoSans-Italic.ttf",
+}
 
 if not zipfile.is_zipfile(zip_path):
     fail("not a valid ZIP archive")
@@ -153,10 +163,8 @@ try:
             fail(f"CRC check failed on member: {bad_member}")
 
         seen_files = set()
-        actual_hashes = {}
         file_bytes = {}
         zip_font_hashes = {}
-        deferred_ttc_errors = []
 
         for info in zf.infolist():
             name = info.filename
@@ -176,19 +184,12 @@ try:
                 continue
 
             base_entry = os.path.basename(name)
-            if (
-                name.startswith("tools/")
-                or name.startswith("config/")
-                or name.startswith("data/")
-                or name.endswith(".log")
-            ):
-                fail(f"forbidden runtime tool, backup, or log in ZIP: {name}")
-
-            if base_entry.startswith("KsuReserved-"):
-                fail(f"reserved OEM system font copy is forbidden in ZIP: {name}")
-
-            if name in ("system/fonts/SysSans-Hans-Regular.ttf", "system/fonts/SysSans-Hant-Regular.ttf", "system/fonts/NotoColorEmoji.ttf"):
-                fail(f"overlaid OEM CJK/Emoji filename is forbidden in v1.0.3 ZIP: {name}")
+            if any(name.startswith(p) for p in FORBIDDEN_PREFIXES) or name in FORBIDDEN_NAMES:
+                fail(f"forbidden file or directory in v2.0.0 ZIP: {name}")
+            if name.endswith(".ttc") or name.endswith(".xml") or name.endswith(".log"):
+                fail(f"forbidden TTC/XML/log entry in v2.0.0 ZIP: {name}")
+            if base_entry.startswith("KsuReserved-") or base_entry.startswith("FontSetting"):
+                fail(f"forbidden OEM or legacy font entry in ZIP: {name}")
 
             if name in seen_files:
                 fail(f"duplicate entry in archive: {name}")
@@ -200,29 +201,18 @@ try:
 
             file_bytes[name] = data
             actual_sha = hashlib.sha256(data).hexdigest().lower()
-            actual_hashes[name] = actual_sha
 
             if name.startswith("system/fonts/"):
                 zip_font_hashes[name] = actual_sha
-                if name in build_font_hashes:
-                    if len(data) != build_font_sizes[name] or actual_sha != build_font_hashes[name]:
-                        err_msg = (
-                            f"packaged font bytes mismatch against validated build artifact for {name}: "
-                            f"expected sha256={build_font_hashes[name]} ({build_font_sizes[name]} bytes), "
-                            f"got sha256={actual_sha} ({len(data)} bytes)"
-                        )
-                        if name == ttc_zip_path:
-                            deferred_ttc_errors.append(err_msg)
-                        else:
-                            fail(err_msg)
+                if name in build_font_sizes and len(data) != build_font_sizes[name]:
+                    fail(
+                        f"size mismatch for {name}: expected {build_font_sizes[name]} bytes, got {len(data)}"
+                    )
 
-            if name in expected_hashes:
-                if actual_sha != expected_hashes[name]:
-                    err_msg = f"SHA-256 mismatch for {name}: expected {expected_hashes[name]}, got {actual_sha}"
-                    if name == ttc_zip_path:
-                        deferred_ttc_errors.append(err_msg)
-                    else:
-                        fail(err_msg)
+            if name in expected_hashes and actual_sha != expected_hashes[name]:
+                fail(
+                    f"SHA-256 mismatch for {name}: expected {expected_hashes[name]}, got {actual_sha}"
+                )
 
         missing = required_all - seen_files
         if missing:
@@ -232,140 +222,16 @@ try:
         if unexpected:
             fail(f"unexpected files in archive: {sorted(unexpected)}")
 
-        # Verify device-sources.sha256 matches exact expected OP13 OOS16 source hashes
-        dev_sources_text = file_bytes["device-sources.sha256"].decode("utf-8")
-        parsed_dev_sources = {}
-        for raw_line in dev_sources_text.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) != 2:
-                fail(f"malformed line in device-sources.sha256: {raw_line!r}")
-            sha_val, rel_p = parts
-            if rel_p in parsed_dev_sources:
-                fail(f"duplicate entry in device-sources.sha256: {rel_p}")
-            parsed_dev_sources[rel_p] = sha_val.lower()
-        if parsed_dev_sources != mx.EXPECTED_DEVICE_SOURCE_HASHES:
-            fail(
-                f"device-sources.sha256 mismatch: expected {mx.EXPECTED_DEVICE_SOURCE_HASHES}, "
-                f"got {parsed_dev_sources}"
-            )
-
-        # Verify payload.sha256 covers all packaged files (except payload.sha256 and customize.sh)
-        payload_text = file_bytes["payload.sha256"].decode("utf-8")
-        parsed_payload = {}
-        for raw_line in payload_text.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) != 2:
-                fail(f"malformed line in payload.sha256: {raw_line!r}")
-            sha_val, rel_p = parts
-            if rel_p in parsed_payload:
-                fail(f"duplicate entry in payload.sha256: {rel_p}")
-            parsed_payload[rel_p] = sha_val.lower()
-
-        expected_payload_keys = seen_files - {"payload.sha256", "customize.sh"}
-        if set(parsed_payload.keys()) != expected_payload_keys:
-            fail(
-                f"payload.sha256 entry set mismatch: missing={sorted(expected_payload_keys - set(parsed_payload.keys()))}, "
-                f"extra={sorted(set(parsed_payload.keys()) - expected_payload_keys)}"
-            )
-        for rel_p, exp_sha in sorted(parsed_payload.items()):
-            if actual_hashes.get(rel_p) != exp_sha:
-                fail(f"payload.sha256 hash mismatch for {rel_p}: listed {exp_sha}, actual {actual_hashes.get(rel_p)}")
-
-        # Verify fixed XML configs in ZIP parse cleanly and contain expected v1.0.3 targets
-        for xml_rel in sorted(required_xml_paths):
-            xml_data = file_bytes[xml_rel].decode("utf-8")
-            if "KsuReserved-" in xml_data:
-                fail(f"{xml_rel} contains forbidden KsuReserved-* reference")
-            try:
-                root_el = ET.fromstring(xml_data)
-            except Exception as exc:
-                fail(f"{xml_rel} is not well-formed XML: {exc}")
-            if root_el.tag != "familyset":
-                fail(f"{xml_rel} root tag is {root_el.tag!r}, expected 'familyset'")
-            for req_str in (
-                "Roboto-Regular.ttf",
-                "NotoSans-Italic.ttf",
-                "NotoSansCJK-Regular.ttc",
-                "KSU-AppleColorEmoji.ttf",
-                "KsuAppleColorEmoji",
-                "NotoColorEmoji.ttf",
-            ):
-                if req_str not in xml_data:
-                    fail(f"{xml_rel} missing expected reference {req_str!r}")
-            if xml_rel in ("system/etc/fonts.xml", "system/system_ext/etc/fonts_base.xml"):
-                for req_str in (
-                    "SysSans-En-Regular.ttf",
-                    "OPSans-En-Regular.ttf",
-                    "KSU-NotoSansCJKsc-VF.ttf",
-                    "KSU-NotoSansCJKtc-VF.ttf",
-                    "SysSans-Hans-Regular.ttf",
-                    "SysSans-Hant-Regular.ttf",
-                ):
-                    if req_str not in xml_data:
-                        fail(f"{xml_rel} missing expected reference {req_str!r}")
-
-        manifest_bytes = file_bytes.get(cf.MANIFEST_FILENAME)
-        manifest_text = manifest_bytes.decode("utf-8")
-
-        ttc_bytes = file_bytes.get(ttc_zip_path)
-        sc_bytes = file_bytes.get("system/fonts/KSU-NotoSansCJKsc-VF.ttf")
-        tc_bytes = file_bytes.get("system/fonts/KSU-NotoSansCJKtc-VF.ttf")
-        if ttc_bytes is None or sc_bytes is None or tc_bytes is None:
-            fail("missing required CJK TTC/TTF payload in archive")
-
-        if zip_font_hashes.get("system/fonts/KSU-NotoSansCJKsc-VF.ttf") != raw_fonts[cf.TTC_SOURCES[2]]:
-            fail(f"KSU-NotoSansCJKsc-VF.ttf in archive does not match locked {cf.TTC_SOURCES[2]} SHA-256")
-        if zip_font_hashes.get("system/fonts/KSU-NotoSansCJKtc-VF.ttf") != raw_fonts[cf.TTC_SOURCES[3]]:
-            fail(f"KSU-NotoSansCJKtc-VF.ttf in archive does not match locked {cf.TTC_SOURCES[3]} SHA-256")
-
-        source_ttfs = {2: sc_bytes, 3: tc_bytes}
-        for idx in (0, 1):
-            src_name = cf.TTC_SOURCES[idx]
-            exp_src_sha = raw_fonts[src_name]
-            cand_path = os.path.join(cache_dir, src_name)
-            if not os.path.isfile(cand_path):
-                fail(
-                    f"missing required cached CJK source font for TTC face {idx} ({src_name}) at {cand_path} "
-                    f"(set FONT_CACHE_DIR to directory containing locked upstream fonts)"
-                )
-            actual_src_sha = cf.sha256_file(cand_path)
-            if actual_src_sha != exp_src_sha:
-                fail(
-                    f"SHA-256 mismatch for cached CJK source font for TTC face {idx} ({src_name}) at {cand_path}: "
-                    f"expected {exp_src_sha}, got {actual_src_sha} (check FONT_CACHE_DIR)"
-                )
-            with open(cand_path, "rb") as fh:
-                source_ttfs[idx] = fh.read()
-
-        ttc_errs = cf.validate_ttc_bytes(
-            ttc_bytes,
-            filename=ttc_zip_path,
-            source_ttfs=source_ttfs,
-            check_size_bounds=False,
-        )
-
-        zm_errs, _zm_hashes = cf.validate_font_manifest_text(
-            manifest_text, raw_fonts, zip_font_hashes
-        )
-
-        combined_errors = []
-        if ttc_errs:
-            combined_errors.append(f"invalid TTC payload ({ttc_errs[0]})")
+        manifest_text = file_bytes[cf.MANIFEST_FILENAME].decode("utf-8")
+        zm_errs, _ = cf.validate_font_manifest_text(manifest_text, raw_fonts, zip_font_hashes)
         if zm_errs:
-            combined_errors.append(f"invalid {cf.MANIFEST_FILENAME} in archive: {zm_errs[0]}")
-        if manifest_bytes != build_manifest_bytes:
-            combined_errors.append(
-                f"{cf.MANIFEST_FILENAME} in archive does not match validated {build_manifest_path}"
-            )
-        combined_errors.extend(deferred_ttc_errors)
-        if combined_errors:
-            fail("; ".join(combined_errors))
+            fail(f"invalid {cf.MANIFEST_FILENAME} in archive: {zm_errs[0]}")
+
+        awk_text = file_bytes["tools/fontxml.awk"].decode("utf-8")
+        fc_text = file_bytes["tools/fontconfig.sh"].decode("utf-8")
+        for font_fname in cf.EXPECTED_TTF_SPECS:
+            if font_fname not in awk_text or font_fname not in fc_text:
+                fail(f"packaged font {font_fname} not referenced in tools/fontxml.awk and tools/fontconfig.sh")
 
         prop_text = file_bytes["module.prop"].decode("utf-8")
         props = {}
@@ -381,13 +247,11 @@ try:
         expected_props = {
             "id": "ksu_noto_fonts_apple_emoji",
             "author": "wang1zhen",
-            "version": "v1.0.3",
-            "versionCode": "103",
+            "version": "v2.0.0",
+            "versionCode": "200",
         }
         for req_k, exp_v in expected_props.items():
             act_v = props.get(req_k, "")
-            if not act_v:
-                fail(f"missing required key '{req_k}' in module.prop")
             if act_v != exp_v:
                 fail(f"invalid module.prop {req_k}={act_v!r} (expected {exp_v!r})")
 
