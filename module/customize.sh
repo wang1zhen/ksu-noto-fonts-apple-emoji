@@ -1,9 +1,9 @@
 #!/system/bin/sh
-# KernelSU module install script for OnePlus 13 / Android 16 / OxygenOS 16 (v1.0.2).
-# Runs inside the KernelSU installer environment where $MODPATH, ui_print, abort,
-# set_perm, and set_perm_recursive are provided.
+# KernelSU module install script for OnePlus 13 / Android 16 / OxygenOS 16 (v1.0.3).
+# Verifies KernelSU + Android 16 (API 36), ensures any previous active module installation
+# under /data/adb/modules is removed and rebooted first, matches live device XML SHA-256
+# digests against device-sources.sha256, and verifies bundled payload.sha256.
 
-# Provide safe fallbacks when invoked in standalone test harnesses
 if ! command -v ui_print >/dev/null 2>&1; then
   ui_print() {
     printf '%s\n' "$*"
@@ -31,8 +31,12 @@ if ! command -v set_perm_recursive >/dev/null 2>&1; then
   }
 fi
 
+MODID="ksu_noto_fonts_apple_emoji"
+ADB_ROOT="${KSU_ADB_ROOT:-/data/adb}"
+SYS_ROOT="${KSU_SYSTEM_ROOT:-}"
+
 ui_print "************************************************"
-ui_print " Noto Sans + Noto Sans CJK + Apple Emoji"
+ui_print " Noto Sans + Noto Sans CJK + Apple Emoji (v1.0.3)"
 ui_print " Target: OnePlus 13 / Android 16 / OxygenOS 16"
 ui_print "************************************************"
 
@@ -44,50 +48,104 @@ if [ "${KSU:-}" != "true" ] && [ -z "${KSU_VER_CODE:-}" ]; then
   abort "! This module requires KernelSU (KSU environment not detected)"
 fi
 
-if command -v getprop >/dev/null 2>&1; then
+sdk="${KSU_SDK_VERSION:-}"
+if [ -z "$sdk" ] && command -v getprop >/dev/null 2>&1; then
   sdk="$(getprop ro.build.version.sdk 2>/dev/null || :)"
-  case "$sdk" in
-    ''|*[!0-9]*)
-      abort "! Failed to read Android SDK version (ro.build.version.sdk)"
-      ;;
-  esac
-  if [ "$sdk" -lt 35 ]; then
-    abort "! Unsupported Android SDK $sdk (requires Android 15/16+ OxygenOS VF font architecture)"
+fi
+case "$sdk" in
+  ''|*[!0-9]*)
+    abort "! Failed to read Android SDK version (ro.build.version.sdk)"
+    ;;
+esac
+if [ "$sdk" -ne 36 ]; then
+  abort "! Unsupported Android SDK $sdk (requires Android 16 / API 36)"
+fi
+
+modpath_real="$(CDPATH='' cd -P -- "$MODPATH" 2>/dev/null && pwd || printf '%s' "$MODPATH")"
+active_mod_dir="$ADB_ROOT/modules/$MODID"
+if [ -e "$active_mod_dir" ] || [ -L "$active_mod_dir" ]; then
+  active_real="$(CDPATH='' cd -P -- "$active_mod_dir" 2>/dev/null && pwd || printf '%s' "$active_mod_dir")"
+  if [ "$active_real" != "$modpath_real" ]; then
+    abort "! Existing module found at $active_mod_dir; uninstall previous version and reboot before installing v1.0.3"
   fi
 fi
 
-ui_print "- Validating environment and adapting system XML..."
-prep_out="$(sh "$MODPATH/tools/fontconfig.sh" prepare 2>&1)"
-prep_rc=$?
-if [ "$prep_rc" -ne 0 ]; then
-  ui_print "! Font configuration adaptation failed:"
-  ui_print "! $prep_out"
-  rm -rf "$MODPATH/.staging" "$MODPATH/system/etc" "$MODPATH/system/system_ext" "$MODPATH/config" "$MODPATH/data" \
-    "$MODPATH/system/fonts/KsuReserved-SysSans-Hans-Regular.ttf" \
-    "$MODPATH/system/fonts/KsuReserved-SysSans-Hant-Regular.ttf" \
-    "$MODPATH/system/fonts/KsuReserved-NotoColorEmoji.ttf" 2>/dev/null || :
-  abort "! Installation aborted safely without modifying system partitions"
+file_sha256() {
+  sha256sum "$1" 2>/dev/null | awk '{print tolower($1)}'
+}
+
+DEV_MANIFEST="$MODPATH/device-sources.sha256"
+if [ ! -f "$DEV_MANIFEST" ]; then
+  abort "! Missing $DEV_MANIFEST in module package"
 fi
 
-ui_print "- Preserved original system fonts as KsuReserved-*.ttf for serif & emoji fallback"
-ui_print "- Adapted /system/etc/font_fallback.xml and /system/etc/fonts.xml"
-if [ -f "$MODPATH/system/system_ext/etc/fonts_base.xml" ]; then
-  ui_print "- Adapted /system_ext/etc/fonts_base.xml"
+ui_print "- Verifying current system XML hashes against device-sources.sha256..."
+verified_sources=0
+while read -r exp_hash rel_path || [ -n "${exp_hash:-}" ]; do
+  case "${exp_hash:-}" in
+    ''|\#*) continue ;;
+  esac
+  if [ -z "${rel_path:-}" ]; then
+    abort "! Malformed line in device-sources.sha256"
+  fi
+  target_path="$SYS_ROOT/$rel_path"
+  if [ ! -f "$target_path" ] && [ "$rel_path" = "system/system_ext/etc/fonts_base.xml" ]; then
+    if [ -f "$SYS_ROOT/system_ext/etc/fonts_base.xml" ]; then
+      target_path="$SYS_ROOT/system_ext/etc/fonts_base.xml"
+    fi
+  fi
+  if [ ! -f "$target_path" ]; then
+    abort "! Missing required device XML: /$rel_path"
+  fi
+  act_hash="$(file_sha256 "$target_path")"
+  exp_lower="$(printf '%s' "$exp_hash" | tr '[:upper:]' '[:lower:]')"
+  if [ -z "$act_hash" ] || [ "$act_hash" != "$exp_lower" ]; then
+    abort "! Device XML hash mismatch for /$rel_path (uninstall old font modules & reboot, or unsupported ROM build)"
+  fi
+  verified_sources=$((verified_sources + 1))
+done < "$DEV_MANIFEST"
+
+if [ "$verified_sources" -ne 3 ]; then
+  abort "! Expected 3 device XML entries in device-sources.sha256, found $verified_sources"
 fi
-if [ -f "$MODPATH/data/fallback.stats" ]; then
-  ui_print "- Fallback stats: $(cat "$MODPATH/data/fallback.stats" 2>/dev/null)"
+
+PAYLOAD_MANIFEST="$MODPATH/payload.sha256"
+if [ ! -f "$PAYLOAD_MANIFEST" ]; then
+  abort "! Missing $PAYLOAD_MANIFEST in module package"
 fi
-if [ -f "$MODPATH/data/legacy.stats" ]; then
-  ui_print "- Legacy stats:   $(cat "$MODPATH/data/legacy.stats" 2>/dev/null)"
-fi
-if [ -f "$MODPATH/data/base.stats" ]; then
-  ui_print "- Base stats:     $(cat "$MODPATH/data/base.stats" 2>/dev/null)"
+
+ui_print "- Verifying packaged payload.sha256..."
+verified_payload=0
+while read -r exp_hash rel_path || [ -n "${exp_hash:-}" ]; do
+  case "${exp_hash:-}" in
+    ''|\#*) continue ;;
+  esac
+  if [ -z "${rel_path:-}" ]; then
+    abort "! Malformed line in payload.sha256"
+  fi
+  case "$rel_path" in
+    /*|*..*|*\\*)
+      abort "! Unsafe path in payload.sha256: $rel_path"
+      ;;
+  esac
+  target_file="$MODPATH/$rel_path"
+  if [ ! -f "$target_file" ] || [ -L "$target_file" ]; then
+    abort "! Missing packaged file: $rel_path"
+  fi
+  act_hash="$(file_sha256 "$target_file")"
+  exp_lower="$(printf '%s' "$exp_hash" | tr '[:upper:]' '[:lower:]')"
+  if [ -z "$act_hash" ] || [ "$act_hash" != "$exp_lower" ]; then
+    abort "! Packaged file hash mismatch: $rel_path"
+  fi
+  verified_payload=$((verified_payload + 1))
+done < "$PAYLOAD_MANIFEST"
+
+if [ "$verified_payload" -lt 11 ]; then
+  abort "! Incomplete payload.sha256 ($verified_payload entries)"
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
-set_perm "$MODPATH/tools/fontconfig.sh" 0 0 0755
-set_perm "$MODPATH/tools/fontxml.awk" 0 0 0644
 
-ui_print "- Static metamodule entrypoint (metamount.sh) verified; actual mount occurs on reboot."
-ui_print "- Installation complete. Reboot device to activate font overlay."
+ui_print "- Verified 3 device XML hashes and $verified_payload packaged payload files."
+ui_print "- Installation complete. Please reboot device to activate fonts."

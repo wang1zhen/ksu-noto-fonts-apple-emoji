@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Host-side font builder for ksu-noto-fonts-apple-emoji.
+"""Host-side font builder for ksu-noto-fonts-apple-emoji (v1.0.3).
 
 Verifies locked upstream source fonts from sources.lock in <cache_dir>, stages the
-8 original-filename TTF overlays, and builds the 4-face NotoSansCJK-Regular.ttc
-(index 0=JP, 1=KR, 2=SC, 3=TC) with table sharing into <out_dir>.
+8 TTF font files (4 Latin original-filename overlays + NotoSans-Italic.ttf +
+dedicated KSU-NotoSansCJKsc-VF.ttf, KSU-NotoSansCJKtc-VF.ttf, KSU-AppleColorEmoji.ttf),
+and builds the 4-face NotoSansCJK-Regular.ttc (index 0=JP, 1=KR, 2=SC, 3=TC) with
+table sharing into <out_dir>.
 """
 
 import argparse
@@ -20,9 +22,9 @@ UPSTREAM_TTF_MAP = {
     "SysSans-En-Regular.ttf": "KSU-NotoSans-Regular-VF.ttf",
     "OPSans-En-Regular.ttf": "KSU-NotoSans-Regular-VF.ttf",
     "NotoSans-Italic.ttf": "KSU-NotoSans-Italic-VF.ttf",
-    "SysSans-Hans-Regular.ttf": "KSU-NotoSansCJKsc-VF.ttf",
-    "SysSans-Hant-Regular.ttf": "KSU-NotoSansCJKtc-VF.ttf",
-    "NotoColorEmoji.ttf": "KSU-AppleColorEmoji.ttf",
+    "KSU-NotoSansCJKsc-VF.ttf": "KSU-NotoSansCJKsc-VF.ttf",
+    "KSU-NotoSansCJKtc-VF.ttf": "KSU-NotoSansCJKtc-VF.ttf",
+    "KSU-AppleColorEmoji.ttf": "KSU-AppleColorEmoji.ttf",
 }
 
 TTC_FILENAME = "NotoSansCJK-Regular.ttc"
@@ -63,7 +65,7 @@ def load_lock_font_hashes(lock_path: str) -> dict[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build original-filename module font payload.")
+    parser = argparse.ArgumentParser(description="Build module font payload.")
     parser.add_argument("cache_dir", help="Directory containing locked upstream KSU-*.ttf files")
     parser.add_argument("out_dir", help="Output directory for generated build/fonts payload")
     parser.add_argument(
@@ -148,7 +150,7 @@ def main() -> int:
 
     manifest_path = os.path.join(args.out_dir, MANIFEST_FILENAME)
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as mf:
-        mf.write("# Generated font artifact manifest for ksu-noto-fonts-apple-emoji (v1.0.2)\n")
+        mf.write("# Generated font artifact manifest for ksu-noto-fonts-apple-emoji (v1.0.3)\n")
         mf.write("# Format: kind|zip_path|upstream_sources|upstream_source_sha256|artifact_sha256\n")
         for row in manifest_rows:
             mf.write("|".join(row) + "\n")

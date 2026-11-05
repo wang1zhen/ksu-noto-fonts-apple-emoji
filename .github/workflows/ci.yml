@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint-and-test:
-    name: Static Check & Regression Tests
+    name: Static Check & Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -22,19 +22,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ShellCheck and BusyBox
+      - name: Install ShellCheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck busybox
+          sudo apt-get install -y shellcheck
 
-      - name: Run ShellCheck on delivered scripts
+      - name: Run ShellCheck on scripts
         run: |
           shellcheck -s sh \
             module/customize.sh \
-            module/tools/fontconfig.sh \
-            scripts/build.sh \
-            scripts/verify_zip.sh \
-            tests/run.sh
+            scripts/*.sh
 
-      - name: Run fixture and simulated install tests
-        run: sh tests/run.sh
+      - name: Run unit tests on synthetic fixtures
+        run: python3 -I -m unittest discover tests

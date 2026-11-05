@@ -57,7 +57,7 @@ EXPECTED_TTF_SPECS = {
         "sample_text": "Italic Noto 0123",
         "sample_lang": "en",
     },
-    "SysSans-Hans-Regular.ttf": {
+    "KSU-NotoSansCJKsc-VF.ttf": {
         "upstream": "KSU-NotoSansCJKsc-VF.ttf",
         "family": "Noto Sans CJK SC",
         "subfamily": "Regular",
@@ -72,7 +72,7 @@ EXPECTED_TTF_SPECS = {
         "sample_text": "骨直中文字体",
         "sample_lang": "zh-Hans",
     },
-    "SysSans-Hant-Regular.ttf": {
+    "KSU-NotoSansCJKtc-VF.ttf": {
         "upstream": "KSU-NotoSansCJKtc-VF.ttf",
         "family": "Noto Sans CJK TC",
         "subfamily": "Regular",
@@ -87,7 +87,7 @@ EXPECTED_TTF_SPECS = {
         "sample_text": "骨直中國繁體",
         "sample_lang": "zh-Hant",
     },
-    "NotoColorEmoji.ttf": {
+    "KSU-AppleColorEmoji.ttf": {
         "upstream": "KSU-AppleColorEmoji.ttf",
         "family": "Apple Color Emoji",
         "subfamily": "Regular",
@@ -949,7 +949,7 @@ def main() -> int:
         actual_artifact_hashes[f"system/fonts/{TTC_FILENAME}"] = sha256_file(ttc_path)
 
     source_ttfs: dict[int, bytes] = {}
-    for idx, overlay_name in ((2, "SysSans-Hans-Regular.ttf"), (3, "SysSans-Hant-Regular.ttf")):
+    for idx, overlay_name in ((2, "KSU-NotoSansCJKsc-VF.ttf"), (3, "KSU-NotoSansCJKtc-VF.ttf")):
         src_name = TTC_SOURCES[idx]
         overlay_path = os.path.join(args.font_dir, overlay_name)
         exp_src_sha = lock_hashes.get(src_name, "")
